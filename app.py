@@ -62,6 +62,12 @@ def initialize_session_state() -> None:
             },
         ])
     
+    if 'previous_volumes' not in st.session_state:
+        st.session_state.previous_volumes = {}
+    
+    if 'previous_atv' not in st.session_state:
+        st.session_state.previous_atv = 100.0
+    
     if 'catalog_df' not in st.session_state:
         catalog_df, costs_df, guidance_df = load_reference_data()
         st.session_state.catalog_df = catalog_df
@@ -121,14 +127,34 @@ def handle_file_uploads(admin_settings: Dict[str, Any]) -> None:
             st.sidebar.error(f"Guidance CSV Error: {str(e)}")
 
 
-def update_tx_counts(deal_data: pd.DataFrame, atv: float) -> pd.DataFrame:
-    """Update transaction counts based on ATV when volume changes."""
+def update_tx_counts_on_changes(deal_data: pd.DataFrame, atv: float) -> pd.DataFrame:
+    """
+    Update transaction counts based on ATV when volume or ATV changes.
+    Auto-calculates tx_count = volume / ATV, but preserves manual edits.
+    """
     updated_data = deal_data.copy()
+    previous_volumes = st.session_state.previous_volumes
+    previous_atv = st.session_state.previous_atv
+    atv_changed = abs(atv - previous_atv) > 0.01
     
     for idx, row in updated_data.iterrows():
-        expected_tx = calculate_tx_count_from_atv(row['volume_eur'], atv)
-        if pd.isna(row['tx_count']) or row['tx_count'] == 0:
+        volume = row['volume_eur']
+        current_tx = row['tx_count']
+        row_key = str(idx)
+        
+        prev_volume = previous_volumes.get(row_key, None)
+        volume_changed = prev_volume is None or abs(volume - prev_volume) > 0.01
+        
+        expected_tx = calculate_tx_count_from_atv(volume, atv)
+        
+        if volume_changed or atv_changed:
             updated_data.at[idx, 'tx_count'] = expected_tx
+        elif pd.isna(current_tx) or current_tx == 0:
+            updated_data.at[idx, 'tx_count'] = expected_tx
+        
+        st.session_state.previous_volumes[row_key] = volume
+    
+    st.session_state.previous_atv = atv
     
     return updated_data
 
@@ -152,6 +178,14 @@ def main() -> None:
     
     if st.session_state.custom_costs_df is not None or st.session_state.custom_guidance_df is not None:
         st.info("Using custom uploaded data files")
+    
+    current_deal_data = update_tx_counts_on_changes(
+        st.session_state.deal_data,
+        sidebar_settings['atv']
+    )
+    
+    if not current_deal_data.equals(st.session_state.deal_data):
+        st.session_state.deal_data = current_deal_data
     
     edited_deal_data = render_deal_matrix(
         deal_data=st.session_state.deal_data,

@@ -136,7 +136,7 @@ def render_deal_matrix(
             deal_data,
             column_config=column_config,
             num_rows="dynamic",
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             key="deal_matrix_editor"
         )
@@ -215,7 +215,7 @@ def render_gap_analysis_chart(results_df: pd.DataFrame) -> None:
         fig.update_xaxes(tickangle=-45)
         fig.update_yaxes(gridcolor='lightgray', gridwidth=0.5)
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 def render_detailed_results_table(results_df: pd.DataFrame) -> None:
@@ -267,7 +267,7 @@ def render_detailed_results_table(results_df: pd.DataFrame) -> None:
         st.dataframe(
             display_df,
             column_config=column_config,
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
