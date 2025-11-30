@@ -3,15 +3,87 @@ Components Module for Commercial Pricing Guidance & Realization.
 Contains UI rendering functions for KPI Cards, Data Editor, and Charts.
 """
 
-import streamlit as st
-import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
-from typing import Dict, Any, List, Optional
-from datetime import datetime
 import io
+import os
+import smtplib
+from email.message import EmailMessage
+from datetime import datetime
+from typing import Dict, Any, List, Optional
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
 
 from data import get_classifications, get_tx_variants_for_material
+
+
+def send_export_email(
+    csv_data: str,
+    file_name: str,
+    email_subject: str,
+    merchant_name: str,
+    deal_date: Any,
+    recipient: str = "krastevgh@gmail.com"
+) -> None:
+    """
+    Send the exported CSV as an email attachment to the specified recipient.
+
+    SMTP configuration is read from environment variables:
+    - EMAIL_HOST
+    - EMAIL_PORT (defaults to 587)
+    - EMAIL_USERNAME
+    - EMAIL_PASSWORD
+    - EMAIL_SENDER (defaults to EMAIL_USERNAME)
+    - EMAIL_USE_TLS (defaults to true)
+    """
+    smtp_host = os.environ.get("EMAIL_HOST")
+    smtp_port = int(os.environ.get("EMAIL_PORT", "587"))
+    smtp_user = os.environ.get("EMAIL_USERNAME")
+    smtp_password = os.environ.get("EMAIL_PASSWORD")
+    sender = os.environ.get("EMAIL_SENDER", smtp_user)
+    use_tls = os.environ.get("EMAIL_USE_TLS", "true").lower() == "true"
+
+    if not smtp_host or not smtp_user or not smtp_password or not sender:
+        st.warning(
+            "Email not sent: SMTP configuration is missing (EMAIL_HOST, EMAIL_USERNAME, EMAIL_PASSWORD, EMAIL_SENDER)."
+        )
+        return
+
+    message = EmailMessage()
+    message["Subject"] = f"{email_subject} - {merchant_name} ({deal_date})"
+    message["From"] = sender
+    message["To"] = recipient
+
+    body_lines = [
+        "Hello,",
+        "",
+        "The requested deal analysis export is attached as a CSV file.",
+        f"Merchant: {merchant_name}",
+        f"Deal date: {deal_date}",
+        f"Exported at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "Regards,",
+        "Price Guidance Calculator",
+    ]
+    message.set_content("\n".join(body_lines))
+
+    message.add_attachment(
+        csv_data.encode("utf-8"),
+        maintype="text",
+        subtype="csv",
+        filename=file_name
+    )
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+            if use_tls:
+                server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.send_message(message)
+        st.success(f"Export emailed to {recipient}.")
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Failed to send export email: {exc}")
 
 
 def render_kpi_cards(metrics: Dict[str, Any]) -> None:
@@ -565,14 +637,25 @@ def render_export_section(
             csv_buffer = io.StringIO()
             export_df.to_csv(csv_buffer, index=False)
             csv_data = csv_buffer.getvalue()
-            
-            st.download_button(
+
+            detailed_file_name = f"deal_analysis_{merchant_name.replace(' ', '_')}_{deal_date}.csv"
+
+            detailed_clicked = st.download_button(
                 label="Download Detailed Results (CSV)",
                 data=csv_data,
-                file_name=f"deal_analysis_{merchant_name.replace(' ', '_')}_{deal_date}.csv",
+                file_name=detailed_file_name,
                 mime="text/csv",
                 key="download_detailed"
             )
+
+            if detailed_clicked:
+                send_export_email(
+                    csv_data,
+                    detailed_file_name,
+                    "Deal Analysis Export",
+                    merchant_name,
+                    deal_date
+                )
         
         with col2:
             summary_data = {
@@ -606,14 +689,25 @@ def render_export_section(
             csv_buffer = io.StringIO()
             summary_df.to_csv(csv_buffer, index=False)
             summary_csv = csv_buffer.getvalue()
-            
-            st.download_button(
+
+            summary_file_name = f"deal_summary_{merchant_name.replace(' ', '_')}_{deal_date}.csv"
+
+            summary_clicked = st.download_button(
                 label="Download Summary (CSV)",
                 data=summary_csv,
-                file_name=f"deal_summary_{merchant_name.replace(' ', '_')}_{deal_date}.csv",
+                file_name=summary_file_name,
                 mime="text/csv",
                 key="download_summary"
             )
+
+            if summary_clicked:
+                send_export_email(
+                    summary_csv,
+                    summary_file_name,
+                    "Deal Summary Export",
+                    merchant_name,
+                    deal_date
+                )
 
 
 def render_historical_comparison(saved_deals: List[Dict[str, Any]]) -> None:
