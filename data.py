@@ -1,26 +1,73 @@
 """
 Data Module for Commercial Pricing Guidance & Realization.
-Handles data loading and mock data generation following the Digital Twin schema.
+Handles data loading from database or mock data generation as fallback.
 """
 
 import pandas as pd
 from typing import Tuple, Dict, List
+import os
+import threading
+
+USE_DATABASE = os.environ.get('DATABASE_URL') is not None
+
+
+_database_initialized = False
+_database_lock = threading.Lock()
+
+
+def ensure_database_seeded():
+    """Ensure database is seeded (run once at startup, thread-safe with locking)."""
+    global _database_initialized
+    
+    if _database_initialized:
+        return
+    
+    with _database_lock:
+        if _database_initialized:
+            return
+        
+        try:
+            from repository import check_database_has_data, clear_cache
+            if not check_database_has_data():
+                from seed_database import seed_database
+                seed_database()
+                clear_cache()
+            _database_initialized = True
+        except Exception as e:
+            print(f"Database initialization warning: {e}")
+            _database_initialized = True
 
 
 def load_reference_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Load reference data for the pricing guidance system.
+    Uses database if available, otherwise falls back to mock data.
     Returns 2 DataFrames: catalog_df, pricing_df (merged costs + targets)
     """
-    catalog_df = generate_catalog_data()
-    pricing_df = generate_pricing_data()
-    
-    return catalog_df, pricing_df
+    if USE_DATABASE:
+        try:
+            ensure_database_seeded()
+            
+            from repository import get_catalog_df, get_pricing_df
+            
+            catalog_df = get_catalog_df()
+            pricing_df = get_pricing_df()
+            
+            if catalog_df.empty or pricing_df.empty:
+                print("Database empty, using mock data")
+                return generate_catalog_data(), generate_pricing_data()
+            
+            return catalog_df, pricing_df
+        except Exception as e:
+            print(f"Database error, falling back to mock data: {e}")
+            return generate_catalog_data(), generate_pricing_data()
+    else:
+        return generate_catalog_data(), generate_pricing_data()
 
 
 def generate_catalog_data() -> pd.DataFrame:
     """
-    Generate Product Catalog with material codes and pricing models.
+    Generate Product Catalog with material codes and pricing models (fallback mock data).
     """
     data = [
         {'material_code': 'AcquiringService', 'tx_variant': 'visa', 'pricing_model': 'Blended', 'default_atv': 100.0},
@@ -38,8 +85,7 @@ def generate_catalog_data() -> pd.DataFrame:
 
 def generate_pricing_data() -> pd.DataFrame:
     """
-    Generate merged Pricing data with costs AND target pricing per product/region.
-    Schema: material_code, tx_variant, region_classification, cost_variable, cost_fixed, target_variable, target_fixed
+    Generate merged Pricing data with costs AND target pricing per product/region (fallback mock data).
     """
     regions = ['Europe Domestic', 'NorthAmerica Domestic', 'Global']
     products = [
@@ -115,11 +161,28 @@ def generate_pricing_data() -> pd.DataFrame:
 
 def get_material_codes() -> List[str]:
     """Return list of available material codes."""
+    if USE_DATABASE:
+        try:
+            from repository import get_material_codes_from_db
+            codes = get_material_codes_from_db()
+            if codes:
+                return codes
+        except Exception:
+            pass
     return ['AcquiringService', 'ProcessingService', 'RevenueProtectService']
 
 
 def get_tx_variants_for_material(material_code: str) -> List[str]:
     """Return list of transaction variants for a specific material code."""
+    if USE_DATABASE:
+        try:
+            from repository import get_tx_variants_for_material_from_db
+            variants = get_tx_variants_for_material_from_db(material_code)
+            if variants:
+                return variants
+        except Exception:
+            pass
+    
     if material_code == 'RevenueProtectService':
         return ['N/A']
     return ['visa', 'mc', 'amex', 'maestro']
@@ -132,11 +195,28 @@ def get_all_tx_variants() -> List[str]:
 
 def get_classifications() -> List[str]:
     """Return list of available price guidance classifications."""
+    if USE_DATABASE:
+        try:
+            from repository import get_classifications_from_db
+            classifications = get_classifications_from_db()
+            if classifications:
+                return classifications
+        except Exception:
+            pass
     return ['Europe Domestic', 'NorthAmerica Domestic', 'Global']
 
 
 def get_default_atv(material_code: str, tx_variant: str) -> float:
     """Get default ATV for a product/variant combination."""
+    if USE_DATABASE:
+        try:
+            from repository import get_default_atv_from_db
+            atv = get_default_atv_from_db(material_code, tx_variant)
+            if atv:
+                return atv
+        except Exception:
+            pass
+    
     atv_defaults = {
         ('AcquiringService', 'visa'): 100.0,
         ('AcquiringService', 'mc'): 95.0,
@@ -242,6 +322,7 @@ def lookup_pricing(
 ) -> Dict:
     """
     Look up pricing data (costs and targets) for a specific product/variant/region.
+    Uses database if available, otherwise uses the provided DataFrame.
     """
     material_code = str(material_code).strip() if pd.notna(material_code) else ''
     tx_variant = str(tx_variant).strip() if pd.notna(tx_variant) else ''
@@ -255,6 +336,15 @@ def lookup_pricing(
             'target_fixed': 0.0,
             'found': False
         }
+    
+    if USE_DATABASE:
+        try:
+            from repository import lookup_pricing_from_db
+            result = lookup_pricing_from_db(material_code, tx_variant, classification)
+            if result['found']:
+                return result
+        except Exception:
+            pass
     
     mask = (
         (pricing_df['material_code'] == material_code) &
@@ -299,8 +389,8 @@ def hydrate_new_rows(
     updated_data = deal_data.copy()
     tx_variants = get_tx_variants_for_material(material_code)
     classifications = get_classifications()
-    default_classification = classifications[0]
-    default_variant = tx_variants[0]
+    default_classification = classifications[0] if classifications else 'Europe Domestic'
+    default_variant = tx_variants[0] if tx_variants else 'visa'
     
     for idx, row in updated_data.iterrows():
         tx_variant = row.get('tx_variant', None)

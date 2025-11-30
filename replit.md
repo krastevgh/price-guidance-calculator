@@ -5,7 +5,7 @@ A production-grade Streamlit application for commercial pricing guidance and rea
 
 ## Current State
 - Fully functional application with all core and advanced features implemented
-- Modular 4-file architecture (data.py, logic.py, components.py, app.py)
+- **PostgreSQL database integration** for persistent pricing data storage
 - Per-product deal matrices with inline Region and ATV configuration
 - Margin-based realization calculation (Actual Margin vs Target Margin)
 - KPI dashboard with realization metrics
@@ -18,7 +18,10 @@ A production-grade Streamlit application for commercial pricing guidance and rea
 - `app.py` - Entry point with page config, session state management, and main layout
 - `components.py` - UI rendering functions (KPI cards, data editor, charts, export, analysis)
 - `logic.py` - Pure Python functions for calculations and business rules
-- `data.py` - Data loading and mock data generation (Digital Twin schema)
+- `data.py` - Data loading from database with fallback to mock data
+- `models.py` - SQLAlchemy ORM models for database tables
+- `repository.py` - Database access layer with caching
+- `seed_database.py` - Script to populate database with initial pricing data
 
 ### Data Schema (Merged Pricing)
 **Table A: Product Catalog (catalog_df)**
