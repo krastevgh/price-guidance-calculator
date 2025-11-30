@@ -4,17 +4,18 @@
 A production-grade Streamlit application for commercial pricing guidance and realization analysis. Built with a modular architecture following Adyen-style internal tooling patterns.
 
 ## Current State
-- Fully functional MVP with all core features implemented
+- Fully functional application with all core and advanced features implemented
 - Modular 4-file architecture (data.py, logic.py, components.py, app.py)
 - Real-time deal matrix with auto-calculated transaction counts
 - KPI dashboard with realization metrics
 - Gap analysis visualization with Plotly charts
+- Data export, historical comparison, drill-down analysis, and scenario comparison
 
 ## Project Architecture
 
 ### File Structure
 - `app.py` - Entry point with page config, session state management, and main layout
-- `components.py` - UI rendering functions (KPI cards, data editor, charts)
+- `components.py` - UI rendering functions (KPI cards, data editor, charts, export, analysis)
 - `logic.py` - Pure Python functions for calculations and business rules
 - `data.py` - Data loading and mock data generation (Digital Twin schema)
 
@@ -41,8 +42,13 @@ A production-grade Streamlit application for commercial pricing guidance and rea
 5. Color-coded realization indicators (red if < 95%)
 6. Gap analysis chart (Target vs Actual vs Cost)
 7. CSV file upload for custom costs/guidance data
+8. Data export functionality (detailed results and summary CSV)
+9. Historical deal comparison with trend visualization
+10. Drill-down analysis by product line and transaction variant
+11. Deal scenario comparison (side-by-side what-if analysis)
 
 ## Recent Changes
+- November 30, 2025: Added data export, historical comparison, drill-down analysis, scenario comparison
 - November 30, 2025: Initial implementation of full MVP
 
 ## User Preferences

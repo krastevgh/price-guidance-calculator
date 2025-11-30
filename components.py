@@ -6,7 +6,10 @@ Contains UI rendering functions for KPI Cards, Data Editor, and Charts.
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 from typing import Dict, Any, List, Optional
+from datetime import datetime
+import io
 
 
 def render_kpi_cards(metrics: Dict[str, Any]) -> None:
@@ -397,7 +400,7 @@ def render_realization_breakdown(results_df: pd.DataFrame) -> None:
         grouped['realization'] = (grouped['actual_revenue'] / grouped['target_revenue'] * 100).round(1)
         
         for idx, row in grouped.iterrows():
-            col_idx = idx % 3
+            col_idx = int(idx) % 3
             target_col = [col1, col2, col3][col_idx]
             
             with target_col:
@@ -420,3 +423,472 @@ def render_realization_breakdown(results_df: pd.DataFrame) -> None:
                     """,
                     unsafe_allow_html=True
                 )
+
+
+def render_export_section(
+    results_df: pd.DataFrame,
+    metrics: Dict[str, Any],
+    merchant_name: str,
+    deal_date: Any
+) -> None:
+    """
+    Render data export section with download buttons for CSV.
+    """
+    with st.container(border=True):
+        st.subheader("Export Deal Analysis")
+        
+        if results_df.empty:
+            st.info("Add products to the deal matrix to enable export.")
+            return
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            export_df = results_df.copy()
+            export_df['merchant_name'] = merchant_name
+            export_df['deal_date'] = str(deal_date)
+            export_df['export_timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            csv_buffer = io.StringIO()
+            export_df.to_csv(csv_buffer, index=False)
+            csv_data = csv_buffer.getvalue()
+            
+            st.download_button(
+                label="Download Detailed Results (CSV)",
+                data=csv_data,
+                file_name=f"deal_analysis_{merchant_name.replace(' ', '_')}_{deal_date}.csv",
+                mime="text/csv",
+                key="download_detailed"
+            )
+        
+        with col2:
+            summary_data = {
+                'Metric': [
+                    'Merchant Name',
+                    'Deal Date',
+                    'Total Deal Value (EUR)',
+                    'Total Actual Revenue (EUR)',
+                    'Total Target Revenue (EUR)',
+                    'Total Cost (EUR)',
+                    'Total Margin (EUR)',
+                    'Global Realization (%)',
+                    'Number of Products'
+                ],
+                'Value': [
+                    merchant_name,
+                    str(deal_date),
+                    f"€{metrics['total_deal_value']:,.2f}",
+                    f"€{metrics['total_actual_revenue']:,.2f}",
+                    f"€{metrics['total_target_revenue']:,.2f}",
+                    f"€{metrics['total_cost']:,.2f}",
+                    f"€{metrics['total_margin']:,.2f}",
+                    f"{metrics['global_realization_pct']:.1f}%",
+                    str(metrics['row_count'])
+                ]
+            }
+            summary_df = pd.DataFrame(summary_data)
+            
+            csv_buffer = io.StringIO()
+            summary_df.to_csv(csv_buffer, index=False)
+            summary_csv = csv_buffer.getvalue()
+            
+            st.download_button(
+                label="Download Summary (CSV)",
+                data=summary_csv,
+                file_name=f"deal_summary_{merchant_name.replace(' ', '_')}_{deal_date}.csv",
+                mime="text/csv",
+                key="download_summary"
+            )
+
+
+def render_historical_comparison(saved_deals: List[Dict[str, Any]]) -> None:
+    """
+    Render historical deal comparison view with trend charts.
+    """
+    with st.container(border=True):
+        st.subheader("Historical Deal Comparison")
+        
+        if not saved_deals or len(saved_deals) == 0:
+            st.info("Save deals to compare them over time. Use 'Save Current Deal' button below.")
+            return
+        
+        history_df = pd.DataFrame([
+            {
+                'Deal Name': deal['name'],
+                'Merchant': deal['merchant_name'],
+                'Date': deal['deal_date'],
+                'Total Value': deal['metrics']['total_deal_value'],
+                'Margin': deal['metrics']['total_margin'],
+                'Realization %': deal['metrics']['global_realization_pct'],
+                'Products': deal['metrics']['row_count'],
+                'Saved At': deal['saved_at']
+            }
+            for deal in saved_deals
+        ])
+        
+        st.dataframe(
+            history_df,
+            column_config={
+                "Deal Name": st.column_config.TextColumn("Deal Name", width="medium"),
+                "Merchant": st.column_config.TextColumn("Merchant", width="small"),
+                "Date": st.column_config.TextColumn("Date", width="small"),
+                "Total Value": st.column_config.NumberColumn("Total Value", format="€%.0f"),
+                "Margin": st.column_config.NumberColumn("Margin", format="€%.2f"),
+                "Realization %": st.column_config.NumberColumn("Realization", format="%.1f%%"),
+                "Products": st.column_config.NumberColumn("Products", format="%d"),
+                "Saved At": st.column_config.TextColumn("Saved At", width="medium"),
+            },
+            width="stretch",
+            hide_index=True
+        )
+        
+        if len(saved_deals) >= 2:
+            st.markdown("#### Realization Trend")
+            
+            trend_data = pd.DataFrame([
+                {
+                    'Deal': deal['name'],
+                    'Realization': deal['metrics']['global_realization_pct'],
+                    'Margin': deal['metrics']['total_margin']
+                }
+                for deal in saved_deals
+            ])
+            
+            fig = go.Figure()
+            
+            fig.add_trace(go.Scatter(
+                x=list(range(len(trend_data))),
+                y=trend_data['Realization'],
+                mode='lines+markers',
+                name='Realization %',
+                line=dict(color='#1976D2', width=3),
+                marker=dict(size=10)
+            ))
+            
+            fig.add_hline(y=95, line_dash="dash", line_color="red", 
+                         annotation_text="95% Target", annotation_position="right")
+            
+            fig.update_layout(
+                xaxis_title='Deal Sequence',
+                yaxis_title='Realization %',
+                height=300,
+                margin=dict(t=30, b=30),
+                xaxis=dict(tickmode='array', tickvals=list(range(len(trend_data))),
+                          ticktext=trend_data['Deal'].tolist())
+            )
+            
+            st.plotly_chart(fig, width="stretch")
+
+
+def render_drill_down_analysis(results_df: pd.DataFrame) -> None:
+    """
+    Render drill-down analysis by product line and transaction variant.
+    """
+    with st.container(border=True):
+        st.subheader("Drill-Down Analysis")
+        
+        if results_df.empty:
+            st.info("Add products to see drill-down analysis.")
+            return
+        
+        valid_results = results_df[results_df['target_revenue'].notna()].copy()
+        
+        if valid_results.empty:
+            st.warning("No guidance available for drill-down analysis.")
+            return
+        
+        tab1, tab2 = st.tabs(["By Product Line", "By Transaction Variant"])
+        
+        with tab1:
+            product_grouped = valid_results.groupby('material_code').agg({
+                'volume_eur': 'sum',
+                'tx_count': 'sum',
+                'actual_revenue': 'sum',
+                'target_revenue': 'sum',
+                'total_cost': 'sum',
+                'actual_margin': 'sum'
+            }).reset_index()
+            
+            product_grouped['realization_pct'] = (
+                product_grouped['actual_revenue'] / product_grouped['target_revenue'] * 100
+            ).round(1)
+            product_grouped['margin_pct'] = (
+                product_grouped['actual_margin'] / product_grouped['actual_revenue'] * 100
+            ).round(1)
+            
+            fig_product = go.Figure()
+            
+            fig_product.add_trace(go.Bar(
+                name='Actual Revenue',
+                x=product_grouped['material_code'],
+                y=product_grouped['actual_revenue'],
+                marker_color='#4CAF50',
+                text=product_grouped['actual_revenue'].apply(lambda x: f'€{x:,.0f}'),
+                textposition='outside'
+            ))
+            
+            fig_product.add_trace(go.Bar(
+                name='Total Cost',
+                x=product_grouped['material_code'],
+                y=product_grouped['total_cost'],
+                marker_color='#FF5722',
+                text=product_grouped['total_cost'].apply(lambda x: f'€{x:,.0f}'),
+                textposition='outside'
+            ))
+            
+            fig_product.add_trace(go.Bar(
+                name='Margin',
+                x=product_grouped['material_code'],
+                y=product_grouped['actual_margin'],
+                marker_color='#2196F3',
+                text=product_grouped['actual_margin'].apply(lambda x: f'€{x:,.0f}'),
+                textposition='outside'
+            ))
+            
+            fig_product.update_layout(
+                barmode='group',
+                xaxis_title='Product Line',
+                yaxis_title='Amount (EUR)',
+                height=350,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            
+            st.plotly_chart(fig_product, width="stretch")
+            
+            st.markdown("##### Product Metrics")
+            st.dataframe(
+                product_grouped[['material_code', 'volume_eur', 'tx_count', 'actual_revenue', 
+                                'actual_margin', 'realization_pct', 'margin_pct']],
+                column_config={
+                    "material_code": st.column_config.TextColumn("Product"),
+                    "volume_eur": st.column_config.NumberColumn("Volume", format="€%.0f"),
+                    "tx_count": st.column_config.NumberColumn("Tx Count", format="%d"),
+                    "actual_revenue": st.column_config.NumberColumn("Revenue", format="€%.2f"),
+                    "actual_margin": st.column_config.NumberColumn("Margin", format="€%.2f"),
+                    "realization_pct": st.column_config.NumberColumn("Realization", format="%.1f%%"),
+                    "margin_pct": st.column_config.NumberColumn("Margin %", format="%.1f%%"),
+                },
+                width="stretch",
+                hide_index=True
+            )
+        
+        with tab2:
+            variant_grouped = valid_results.groupby('tx_variant').agg({
+                'volume_eur': 'sum',
+                'tx_count': 'sum',
+                'actual_revenue': 'sum',
+                'target_revenue': 'sum',
+                'total_cost': 'sum',
+                'actual_margin': 'sum'
+            }).reset_index()
+            
+            variant_grouped['realization_pct'] = (
+                variant_grouped['actual_revenue'] / variant_grouped['target_revenue'] * 100
+            ).round(1)
+            
+            fig_variant = px.pie(
+                variant_grouped,
+                values='actual_revenue',
+                names='tx_variant',
+                title='Revenue by Transaction Variant',
+                color_discrete_sequence=px.colors.qualitative.Set2
+            )
+            
+            fig_variant.update_traces(textposition='inside', textinfo='percent+label')
+            fig_variant.update_layout(height=350)
+            
+            st.plotly_chart(fig_variant, width="stretch")
+            
+            st.markdown("##### Variant Metrics")
+            st.dataframe(
+                variant_grouped[['tx_variant', 'volume_eur', 'tx_count', 'actual_revenue', 
+                                'actual_margin', 'realization_pct']],
+                column_config={
+                    "tx_variant": st.column_config.TextColumn("Variant"),
+                    "volume_eur": st.column_config.NumberColumn("Volume", format="€%.0f"),
+                    "tx_count": st.column_config.NumberColumn("Tx Count", format="%d"),
+                    "actual_revenue": st.column_config.NumberColumn("Revenue", format="€%.2f"),
+                    "actual_margin": st.column_config.NumberColumn("Margin", format="€%.2f"),
+                    "realization_pct": st.column_config.NumberColumn("Realization", format="%.1f%%"),
+                },
+                width="stretch",
+                hide_index=True
+            )
+
+
+def render_scenario_comparison(scenarios: List[Dict[str, Any]]) -> None:
+    """
+    Render side-by-side scenario comparison for what-if analysis.
+    """
+    with st.container(border=True):
+        st.subheader("Scenario Comparison")
+        
+        if not scenarios or len(scenarios) < 2:
+            st.info("Save at least 2 scenarios to compare. Use 'Save as Scenario' button to save the current deal configuration.")
+            return
+        
+        scenario_names = [s['name'] for s in scenarios]
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            scenario_a_name = st.selectbox(
+                "Scenario A",
+                options=scenario_names,
+                index=0,
+                key="scenario_a_select"
+            )
+        
+        with col2:
+            default_b_idx = min(1, len(scenario_names) - 1)
+            scenario_b_name = st.selectbox(
+                "Scenario B",
+                options=scenario_names,
+                index=default_b_idx,
+                key="scenario_b_select"
+            )
+        
+        scenario_a = next((s for s in scenarios if s['name'] == scenario_a_name), None)
+        scenario_b = next((s for s in scenarios if s['name'] == scenario_b_name), None)
+        
+        if scenario_a and scenario_b:
+            metrics_a = scenario_a['metrics']
+            metrics_b = scenario_b['metrics']
+            
+            comparison_data = {
+                'Metric': [
+                    'Total Deal Value',
+                    'Actual Revenue',
+                    'Target Revenue',
+                    'Total Cost',
+                    'Total Margin',
+                    'Realization %',
+                    'Product Count'
+                ],
+                scenario_a_name: [
+                    f"€{metrics_a['total_deal_value']:,.0f}",
+                    f"€{metrics_a['total_actual_revenue']:,.2f}",
+                    f"€{metrics_a['total_target_revenue']:,.2f}",
+                    f"€{metrics_a['total_cost']:,.2f}",
+                    f"€{metrics_a['total_margin']:,.2f}",
+                    f"{metrics_a['global_realization_pct']:.1f}%",
+                    str(metrics_a['row_count'])
+                ],
+                scenario_b_name: [
+                    f"€{metrics_b['total_deal_value']:,.0f}",
+                    f"€{metrics_b['total_actual_revenue']:,.2f}",
+                    f"€{metrics_b['total_target_revenue']:,.2f}",
+                    f"€{metrics_b['total_cost']:,.2f}",
+                    f"€{metrics_b['total_margin']:,.2f}",
+                    f"{metrics_b['global_realization_pct']:.1f}%",
+                    str(metrics_b['row_count'])
+                ],
+                'Difference': [
+                    f"€{metrics_b['total_deal_value'] - metrics_a['total_deal_value']:+,.0f}",
+                    f"€{metrics_b['total_actual_revenue'] - metrics_a['total_actual_revenue']:+,.2f}",
+                    f"€{metrics_b['total_target_revenue'] - metrics_a['total_target_revenue']:+,.2f}",
+                    f"€{metrics_b['total_cost'] - metrics_a['total_cost']:+,.2f}",
+                    f"€{metrics_b['total_margin'] - metrics_a['total_margin']:+,.2f}",
+                    f"{metrics_b['global_realization_pct'] - metrics_a['global_realization_pct']:+.1f}pp",
+                    f"{metrics_b['row_count'] - metrics_a['row_count']:+d}"
+                ]
+            }
+            
+            comparison_df = pd.DataFrame(comparison_data)
+            
+            st.dataframe(
+                comparison_df,
+                width="stretch",
+                hide_index=True
+            )
+            
+            fig = go.Figure()
+            
+            metrics_for_chart = ['Total Deal Value', 'Actual Revenue', 'Total Margin']
+            values_a = [
+                metrics_a['total_deal_value'],
+                metrics_a['total_actual_revenue'],
+                metrics_a['total_margin']
+            ]
+            values_b = [
+                metrics_b['total_deal_value'],
+                metrics_b['total_actual_revenue'],
+                metrics_b['total_margin']
+            ]
+            
+            fig.add_trace(go.Bar(
+                name=scenario_a_name,
+                x=metrics_for_chart,
+                y=values_a,
+                marker_color='#1976D2',
+                text=[f'€{v:,.0f}' for v in values_a],
+                textposition='outside'
+            ))
+            
+            fig.add_trace(go.Bar(
+                name=scenario_b_name,
+                x=metrics_for_chart,
+                y=values_b,
+                marker_color='#4CAF50',
+                text=[f'€{v:,.0f}' for v in values_b],
+                textposition='outside'
+            ))
+            
+            fig.update_layout(
+                barmode='group',
+                xaxis_title='Metric',
+                yaxis_title='Amount (EUR)',
+                height=350,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            
+            st.plotly_chart(fig, width="stretch")
+
+
+def render_save_deal_controls(
+    merchant_name: str,
+    deal_date: Any,
+    metrics: Dict[str, Any],
+    results_df: pd.DataFrame
+) -> Optional[Dict[str, Any]]:
+    """
+    Render controls for saving deals/scenarios.
+    Returns deal data if save button is clicked.
+    """
+    with st.container(border=True):
+        st.subheader("Save Deal / Scenario")
+        
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            deal_name = st.text_input(
+                "Deal/Scenario Name",
+                value=f"{merchant_name} - {deal_date}",
+                key="save_deal_name"
+            )
+        
+        with col2:
+            save_as_deal = st.button(
+                "Save as Deal",
+                key="save_deal_btn",
+                type="primary"
+            )
+        
+        with col3:
+            save_as_scenario = st.button(
+                "Save as Scenario",
+                key="save_scenario_btn"
+            )
+        
+        if save_as_deal or save_as_scenario:
+            return {
+                'name': deal_name,
+                'merchant_name': merchant_name,
+                'deal_date': str(deal_date),
+                'metrics': metrics,
+                'results': results_df.to_dict('records'),
+                'saved_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'type': 'deal' if save_as_deal else 'scenario'
+            }
+        
+        return None

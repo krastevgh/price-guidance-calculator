@@ -33,7 +33,12 @@ from components import (
     render_sidebar_settings,
     render_admin_settings,
     render_validation_errors,
-    render_realization_breakdown
+    render_realization_breakdown,
+    render_export_section,
+    render_historical_comparison,
+    render_drill_down_analysis,
+    render_scenario_comparison,
+    render_save_deal_controls
 )
 
 
@@ -79,6 +84,12 @@ def initialize_session_state() -> None:
     
     if 'custom_guidance_df' not in st.session_state:
         st.session_state.custom_guidance_df = None
+    
+    if 'saved_deals' not in st.session_state:
+        st.session_state.saved_deals = []
+    
+    if 'saved_scenarios' not in st.session_state:
+        st.session_state.saved_scenarios = []
 
 
 def get_active_data() -> Dict[str, pd.DataFrame]:
@@ -224,6 +235,37 @@ def main() -> None:
                 render_realization_breakdown(results_df)
             
             render_detailed_results_table(results_df)
+            
+            render_drill_down_analysis(results_df)
+            
+            render_export_section(
+                results_df=results_df,
+                metrics=metrics,
+                merchant_name=sidebar_settings['merchant_name'],
+                deal_date=sidebar_settings['deal_date']
+            )
+            
+            saved_data = render_save_deal_controls(
+                merchant_name=sidebar_settings['merchant_name'],
+                deal_date=sidebar_settings['deal_date'],
+                metrics=metrics,
+                results_df=results_df
+            )
+            
+            if saved_data:
+                if saved_data['type'] == 'deal':
+                    st.session_state.saved_deals.append(saved_data)
+                    st.success(f"Deal '{saved_data['name']}' saved successfully!")
+                else:
+                    st.session_state.saved_scenarios.append(saved_data)
+                    st.success(f"Scenario '{saved_data['name']}' saved successfully!")
+                st.rerun()
+            
+            st.markdown("---")
+            
+            render_historical_comparison(st.session_state.saved_deals)
+            
+            render_scenario_comparison(st.session_state.saved_scenarios)
     else:
         st.info("Add products to the deal matrix above to begin pricing analysis.")
     
