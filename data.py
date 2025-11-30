@@ -86,6 +86,9 @@ def generate_catalog_data() -> pd.DataFrame:
 def generate_pricing_data() -> pd.DataFrame:
     """
     Generate merged Pricing data with costs AND target pricing per product/region (fallback mock data).
+    Now includes ECOM and POS specific pricing for Acquiring and Processing services.
+    
+    ECOM typically has lower costs (online transactions) while POS has slightly higher costs.
     """
     regions = ['Europe Domestic', 'NorthAmerica Domestic', 'Global']
     products = [
@@ -111,6 +114,11 @@ def generate_pricing_data() -> pd.DataFrame:
         'NorthAmerica Domestic': {'var_base': 0.0065, 'fixed_base': 0.055},
         'Global': {'var_base': 0.008, 'fixed_base': 0.07},
     }
+    
+    ecom_cost_multiplier = 0.9
+    pos_cost_multiplier = 1.15
+    ecom_target_multiplier = 0.95
+    pos_target_multiplier = 1.1
     
     product_cost_multipliers = {
         'AcquiringService': {'var': 1.0, 'fixed': 1.0},
@@ -141,19 +149,47 @@ def generate_pricing_data() -> pd.DataFrame:
             target_mult = product_target_multipliers[material_code]
             var_mult = variant_multipliers[tx_variant]
             
-            cost_variable = round(cost_base['var_base'] * cost_mult['var'] * var_mult, 6)
-            cost_fixed = round(cost_base['fixed_base'] * cost_mult['fixed'] * var_mult, 4)
-            target_variable = round(target_base['var_base'] * target_mult['var'] * var_mult, 6)
-            target_fixed = round(target_base['fixed_base'] * target_mult['fixed'] * var_mult, 4)
+            base_cost_variable = cost_base['var_base'] * cost_mult['var'] * var_mult
+            base_cost_fixed = cost_base['fixed_base'] * cost_mult['fixed'] * var_mult
+            base_target_variable = target_base['var_base'] * target_mult['var'] * var_mult
+            base_target_fixed = target_base['fixed_base'] * target_mult['fixed'] * var_mult
+            
+            if material_code in ['AcquiringService', 'ProcessingService']:
+                ecom_cost_variable = round(base_cost_variable * ecom_cost_multiplier, 6)
+                ecom_cost_fixed = round(base_cost_fixed * ecom_cost_multiplier, 4)
+                ecom_target_variable = round(base_target_variable * ecom_target_multiplier, 6)
+                ecom_target_fixed = round(base_target_fixed * ecom_target_multiplier, 4)
+                
+                pos_cost_variable = round(base_cost_variable * pos_cost_multiplier, 6)
+                pos_cost_fixed = round(base_cost_fixed * pos_cost_multiplier, 4)
+                pos_target_variable = round(base_target_variable * pos_target_multiplier, 6)
+                pos_target_fixed = round(base_target_fixed * pos_target_multiplier, 4)
+            else:
+                ecom_cost_variable = round(base_cost_variable, 6)
+                ecom_cost_fixed = round(base_cost_fixed, 4)
+                ecom_target_variable = round(base_target_variable, 6)
+                ecom_target_fixed = round(base_target_fixed, 4)
+                pos_cost_variable = ecom_cost_variable
+                pos_cost_fixed = ecom_cost_fixed
+                pos_target_variable = ecom_target_variable
+                pos_target_fixed = ecom_target_fixed
             
             data.append({
                 'material_code': material_code,
                 'tx_variant': tx_variant,
                 'region_classification': region,
-                'cost_variable': cost_variable,
-                'cost_fixed': cost_fixed,
-                'target_variable': target_variable,
-                'target_fixed': target_fixed,
+                'cost_variable': round(base_cost_variable, 6),
+                'cost_fixed': round(base_cost_fixed, 4),
+                'target_variable': round(base_target_variable, 6),
+                'target_fixed': round(base_target_fixed, 4),
+                'ecom_cost_variable': ecom_cost_variable,
+                'ecom_cost_fixed': ecom_cost_fixed,
+                'ecom_target_variable': ecom_target_variable,
+                'ecom_target_fixed': ecom_target_fixed,
+                'pos_cost_variable': pos_cost_variable,
+                'pos_cost_fixed': pos_cost_fixed,
+                'pos_target_variable': pos_target_variable,
+                'pos_target_fixed': pos_target_fixed,
             })
     
     return pd.DataFrame(data)
@@ -320,26 +356,46 @@ def lookup_pricing(
 ) -> Dict:
     """
     Look up pricing data (costs and targets) for a specific product/variant/region.
+    Now includes ECOM and POS specific pricing for channel-based calculations.
     Uses database if available, otherwise uses the provided DataFrame.
     """
     material_code = str(material_code).strip() if pd.notna(material_code) else ''
     tx_variant = str(tx_variant).strip() if pd.notna(tx_variant) else ''
     classification = str(classification).strip() if pd.notna(classification) else ''
     
+    default_result = {
+        'cost_variable': 0.0,
+        'cost_fixed': 0.0,
+        'target_variable': 0.0,
+        'target_fixed': 0.0,
+        'ecom_cost_variable': 0.0,
+        'ecom_cost_fixed': 0.0,
+        'ecom_target_variable': 0.0,
+        'ecom_target_fixed': 0.0,
+        'pos_cost_variable': 0.0,
+        'pos_cost_fixed': 0.0,
+        'pos_target_variable': 0.0,
+        'pos_target_fixed': 0.0,
+        'found': False
+    }
+    
     if not material_code or not tx_variant or not classification:
-        return {
-            'cost_variable': 0.0,
-            'cost_fixed': 0.0,
-            'target_variable': 0.0,
-            'target_fixed': 0.0,
-            'found': False
-        }
+        return default_result
     
     if USE_DATABASE:
         try:
             from repository import lookup_pricing_from_db
             result = lookup_pricing_from_db(material_code, tx_variant, classification)
             if result['found']:
+                if 'ecom_cost_variable' not in result:
+                    result['ecom_cost_variable'] = result['cost_variable']
+                    result['ecom_cost_fixed'] = result['cost_fixed']
+                    result['ecom_target_variable'] = result['target_variable']
+                    result['ecom_target_fixed'] = result['target_fixed']
+                    result['pos_cost_variable'] = result['cost_variable']
+                    result['pos_cost_fixed'] = result['cost_fixed']
+                    result['pos_target_variable'] = result['target_variable']
+                    result['pos_target_fixed'] = result['target_fixed']
                 return result
         except Exception:
             pass
@@ -353,22 +409,38 @@ def lookup_pricing(
     matched = pricing_df[mask]
     
     if matched.empty:
-        return {
-            'cost_variable': 0.0,
-            'cost_fixed': 0.0,
-            'target_variable': 0.0,
-            'target_fixed': 0.0,
-            'found': False
-        }
+        return default_result
     
     row = matched.iloc[0]
-    return {
+    
+    result = {
         'cost_variable': float(row['cost_variable']),
         'cost_fixed': float(row['cost_fixed']),
         'target_variable': float(row['target_variable']),
         'target_fixed': float(row['target_fixed']),
         'found': True
     }
+    
+    if 'ecom_cost_variable' in row:
+        result['ecom_cost_variable'] = float(row['ecom_cost_variable'])
+        result['ecom_cost_fixed'] = float(row['ecom_cost_fixed'])
+        result['ecom_target_variable'] = float(row['ecom_target_variable'])
+        result['ecom_target_fixed'] = float(row['ecom_target_fixed'])
+        result['pos_cost_variable'] = float(row['pos_cost_variable'])
+        result['pos_cost_fixed'] = float(row['pos_cost_fixed'])
+        result['pos_target_variable'] = float(row['pos_target_variable'])
+        result['pos_target_fixed'] = float(row['pos_target_fixed'])
+    else:
+        result['ecom_cost_variable'] = result['cost_variable']
+        result['ecom_cost_fixed'] = result['cost_fixed']
+        result['ecom_target_variable'] = result['target_variable']
+        result['ecom_target_fixed'] = result['target_fixed']
+        result['pos_cost_variable'] = result['cost_variable']
+        result['pos_cost_fixed'] = result['cost_fixed']
+        result['pos_target_variable'] = result['target_variable']
+        result['pos_target_fixed'] = result['target_fixed']
+    
+    return result
 
 
 def hydrate_new_rows(

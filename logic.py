@@ -71,7 +71,8 @@ def calculate_single_row_realization(
     Calculate realization metrics for a single deal row.
     Handles NaN/blank values gracefully.
     
-    For Acquiring and Processing services, applies ECOM/POS volume split.
+    For Acquiring and Processing services, applies ECOM/POS volume split
+    with channel-specific pricing (ECOM has lower costs, POS has higher costs).
     Revenue Protect is not affected by ECOM/POS split.
     """
     tx_variant = str(row.get('tx_variant', '')).strip()
@@ -94,12 +95,41 @@ def calculate_single_row_realization(
     
     pricing = lookup_pricing(pricing_df, material_code, tx_variant, classification)
     
-    cost_var = pricing['cost_variable']
-    cost_fixed = pricing['cost_fixed']
-    
-    actual_revenue = calculate_revenue(volume, proposed_var, tx_count, proposed_fixed)
-    target_revenue = calculate_revenue(volume, target_var, tx_count, target_fixed)
-    total_cost = calculate_revenue(volume, cost_var, tx_count, cost_fixed)
+    if material_code in ['AcquiringService', 'ProcessingService']:
+        ecom_cost_var = pricing.get('ecom_cost_variable', pricing['cost_variable'])
+        ecom_cost_fixed = pricing.get('ecom_cost_fixed', pricing['cost_fixed'])
+        pos_cost_var = pricing.get('pos_cost_variable', pricing['cost_variable'])
+        pos_cost_fixed = pricing.get('pos_cost_fixed', pricing['cost_fixed'])
+        
+        ecom_target_var = pricing.get('ecom_target_variable', pricing['target_variable'])
+        ecom_target_fixed = pricing.get('ecom_target_fixed', pricing['target_fixed'])
+        pos_target_var = pricing.get('pos_target_variable', pricing['target_variable'])
+        pos_target_fixed = pricing.get('pos_target_fixed', pricing['target_fixed'])
+        
+        ecom_actual_revenue = calculate_revenue(ecom_volume, proposed_var, ecom_tx_count, proposed_fixed)
+        pos_actual_revenue = calculate_revenue(pos_volume, proposed_var, pos_tx_count, proposed_fixed)
+        actual_revenue = ecom_actual_revenue + pos_actual_revenue
+        
+        ecom_target_revenue = calculate_revenue(ecom_volume, ecom_target_var, ecom_tx_count, ecom_target_fixed)
+        pos_target_revenue = calculate_revenue(pos_volume, pos_target_var, pos_tx_count, pos_target_fixed)
+        target_revenue = ecom_target_revenue + pos_target_revenue
+        
+        ecom_cost = calculate_revenue(ecom_volume, ecom_cost_var, ecom_tx_count, ecom_cost_fixed)
+        pos_cost = calculate_revenue(pos_volume, pos_cost_var, pos_tx_count, pos_cost_fixed)
+        total_cost = ecom_cost + pos_cost
+        
+        cost_var = (ecom_cost_var * (ecom_split_pct/100) + pos_cost_var * ((100-ecom_split_pct)/100))
+        cost_fixed = (ecom_cost_fixed * (ecom_split_pct/100) + pos_cost_fixed * ((100-ecom_split_pct)/100))
+    else:
+        cost_var = pricing['cost_variable']
+        cost_fixed = pricing['cost_fixed']
+        
+        actual_revenue = calculate_revenue(volume, proposed_var, tx_count, proposed_fixed)
+        target_revenue = calculate_revenue(volume, target_var, tx_count, target_fixed)
+        total_cost = calculate_revenue(volume, cost_var, tx_count, cost_fixed)
+        
+        ecom_cost = 0.0
+        pos_cost = 0.0
     
     actual_margin = actual_revenue - total_cost
     target_margin = target_revenue - total_cost
@@ -120,6 +150,8 @@ def calculate_single_row_realization(
         'pos_volume': pos_volume,
         'ecom_split_pct': ecom_split_pct,
         'tx_count': tx_count,
+        'ecom_tx_count': ecom_tx_count,
+        'pos_tx_count': pos_tx_count,
         'target_variable_pct': target_var_pct,
         'target_fixed_eur': target_fixed,
         'proposed_variable_pct': proposed_var_pct,
