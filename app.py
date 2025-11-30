@@ -143,6 +143,12 @@ def main() -> None:
     
     render_header(sidebar_settings['merchant_name'])
     
+    global_atv = sidebar_settings['global_atv']
+    ecom_split_pct = sidebar_settings['ecom_split_pct']
+    industry = sidebar_settings['industry']
+    
+    st.markdown(f"**Industry:** {industry} | **ATV:** €{global_atv:.2f} | **ECOM/POS:** {ecom_split_pct}%/{100-ecom_split_pct}%")
+    
     pricing_df = get_active_pricing_df()
     
     if st.session_state.custom_pricing_df is not None:
@@ -162,7 +168,7 @@ def main() -> None:
         current_data = st.session_state[session_key]
         
         current_data = hydrate_new_rows(current_data, material_code, pricing_df)
-        current_data = update_tx_counts_for_product(current_data)
+        current_data = update_tx_counts_for_product(current_data, global_atv)
         current_data = update_targets_from_pricing(current_data, material_code, pricing_df)
         
         edited_data = render_product_deal_matrix(
@@ -173,7 +179,7 @@ def main() -> None:
         
         if not edited_data.equals(st.session_state[session_key]):
             edited_data = hydrate_new_rows(edited_data, material_code, pricing_df)
-            edited_data = update_tx_counts_for_product(edited_data)
+            edited_data = update_tx_counts_for_product(edited_data, global_atv)
             edited_data = update_targets_from_pricing(edited_data, material_code, pricing_df)
             st.session_state[session_key] = edited_data
         
@@ -195,10 +201,12 @@ def main() -> None:
             if not deal_data.empty:
                 valid_deal_data = filter_valid_rows(deal_data)
                 if not valid_deal_data.empty:
+                    use_ecom_split = material_code in ['AcquiringService', 'ProcessingService']
                     results_df = calculate_deal_realization(
                         deal_inputs_df=valid_deal_data,
                         pricing_df=pricing_df,
-                        material_code=material_code
+                        material_code=material_code,
+                        ecom_split_pct=ecom_split_pct if use_ecom_split else 100.0
                     )
                     product_results[material_code] = results_df
                 else:

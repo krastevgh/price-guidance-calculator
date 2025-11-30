@@ -79,7 +79,7 @@ def render_product_deal_matrix(
 ) -> pd.DataFrame:
     """
     Render an editable deal matrix for a specific product line.
-    Includes per-row classification, ATV, and target/proposed pricing.
+    ATV is now global (from Deal Settings). tx_count is auto-calculated and read-only.
     """
     tx_variants = get_tx_variants_for_material(material_code)
     classifications = get_classifications()
@@ -92,6 +92,12 @@ def render_product_deal_matrix(
     
     with st.expander(f"**{product_labels.get(material_code, material_code)}**", expanded=True):
         st.caption(f"Configure pricing for {product_labels.get(material_code, material_code)}. Target prices are pre-populated - adjust Proposed prices as your sale price.")
+        
+        display_columns = ['tx_variant', 'region_classification', 'volume_eur', 'tx_count',
+                          'target_variable_pct', 'target_fixed_eur', 
+                          'proposed_variable_pct', 'proposed_fixed_eur']
+        available_cols = [c for c in display_columns if c in deal_data.columns]
+        display_data = deal_data[available_cols].copy() if available_cols else deal_data.copy()
         
         column_config = {
             "tx_variant": st.column_config.SelectboxColumn(
@@ -115,24 +121,12 @@ def render_product_deal_matrix(
                 required=True,
                 width="medium"
             ),
-            "atv": st.column_config.NumberColumn(
-                "ATV (EUR)",
-                min_value=1.0,
-                max_value=10000.0,
-                step=5.0,
-                format="€%.2f",
-                required=True,
-                width="small",
-                help="Average Transaction Value"
-            ),
             "tx_count": st.column_config.NumberColumn(
                 "Tx Count",
-                min_value=0,
-                max_value=100000000,
-                step=100,
                 format="%d",
-                required=True,
-                width="small"
+                width="small",
+                disabled=True,
+                help="Auto-calculated: Volume / Global ATV"
             ),
             "target_variable_pct": st.column_config.NumberColumn(
                 "Target Var %",
@@ -177,7 +171,7 @@ def render_product_deal_matrix(
         }
         
         edited_df = st.data_editor(
-            deal_data,
+            display_data,
             column_config=column_config,
             num_rows="dynamic",
             width="stretch",
@@ -328,6 +322,8 @@ def render_detailed_results_table(all_results: Dict[str, pd.DataFrame]) -> None:
             'tx_variant',
             'region_classification',
             'volume_eur',
+            'ecom_volume',
+            'pos_volume',
             'tx_count',
             'proposed_variable_pct',
             'proposed_fixed_eur',
@@ -347,6 +343,8 @@ def render_detailed_results_table(all_results: Dict[str, pd.DataFrame]) -> None:
             "tx_variant": st.column_config.TextColumn("Variant", width="small"),
             "region_classification": st.column_config.TextColumn("Region", width="small"),
             "volume_eur": st.column_config.NumberColumn("Volume", format="€%.0f"),
+            "ecom_volume": st.column_config.NumberColumn("ECOM Vol", format="€%.0f", help="ECOM channel volume"),
+            "pos_volume": st.column_config.NumberColumn("POS Vol", format="€%.0f", help="POS channel volume"),
             "tx_count": st.column_config.NumberColumn("Tx Count", format="%d"),
             "proposed_variable_pct": st.column_config.NumberColumn("Prop. Var %", format="%.4f%%"),
             "proposed_fixed_eur": st.column_config.NumberColumn("Prop. Fixed", format="€%.4f"),
@@ -364,6 +362,23 @@ def render_detailed_results_table(all_results: Dict[str, pd.DataFrame]) -> None:
             width="stretch",
             hide_index=True
         )
+
+
+INDUSTRY_OPTIONS = [
+    "Delivery Services",
+    "Transportation & Mobility",
+    "Internet, Media, Software & Apps",
+    "Gambling",
+    "Financial Services",
+    "Public Services",
+    "Consumer & Business Services",
+    "Non-Profit Organizations",
+    "Entertainment & Amusement",
+    "Food & Beverage",
+    "Hospitality & Travel",
+    "Retail",
+    "Other"
+]
 
 
 def render_sidebar_settings(default_date: Any) -> Dict[str, Any]:
@@ -384,9 +399,43 @@ def render_sidebar_settings(default_date: Any) -> Dict[str, Any]:
         help="Select the effective date for this deal"
     )
     
+    global_atv = st.sidebar.number_input(
+        "Average Transaction Value (ATV)",
+        min_value=1.0,
+        max_value=10000.0,
+        value=50.0,
+        step=5.0,
+        format="%.2f",
+        help="Global ATV applied to all products. Tx Count = Volume / ATV"
+    )
+    
+    industry = st.sidebar.selectbox(
+        "Industry",
+        options=INDUSTRY_OPTIONS,
+        index=11,
+        help="Select the merchant's industry"
+    )
+    
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Channel Split")
+    
+    ecom_split_pct = st.sidebar.slider(
+        "ECOM Split %",
+        min_value=0,
+        max_value=100,
+        value=70,
+        step=5,
+        help="Percentage of volume from ECOM channel (remainder is POS). Applies to Acquiring and Processing services."
+    )
+    
+    st.sidebar.caption(f"ECOM: {ecom_split_pct}% | POS: {100 - ecom_split_pct}%")
+    
     return {
         'merchant_name': merchant_name,
         'deal_date': deal_date,
+        'global_atv': global_atv,
+        'industry': industry,
+        'ecom_split_pct': ecom_split_pct,
     }
 
 

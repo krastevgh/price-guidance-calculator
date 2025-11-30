@@ -11,12 +11,15 @@ from data import lookup_pricing
 def calculate_deal_realization(
     deal_inputs_df: pd.DataFrame,
     pricing_df: pd.DataFrame,
-    material_code: str
+    material_code: str,
+    ecom_split_pct: float = 100.0
 ) -> pd.DataFrame:
     """
     Calculate deal realization metrics for all input rows of a product.
     
-    New calculation logic:
+    For Acquiring and Processing services, applies ECOM/POS split to volume.
+    
+    Calculation logic:
     - Actual Revenue = (Volume * proposed_var) + (Tx * proposed_fixed)
     - Target Revenue = (Volume * target_var) + (Tx * target_fixed)
     - Cost = (Volume * cost_var) + (Tx * cost_fixed)
@@ -30,7 +33,8 @@ def calculate_deal_realization(
         result = calculate_single_row_realization(
             row=row,
             pricing_df=pricing_df,
-            material_code=material_code
+            material_code=material_code,
+            ecom_split_pct=ecom_split_pct
         )
         results.append(result)
     
@@ -60,17 +64,25 @@ def safe_int(value, default: int = 0) -> int:
 def calculate_single_row_realization(
     row: pd.Series,
     pricing_df: pd.DataFrame,
-    material_code: str
+    material_code: str,
+    ecom_split_pct: float = 100.0
 ) -> Dict[str, Any]:
     """
     Calculate realization metrics for a single deal row.
     Handles NaN/blank values gracefully.
+    
+    For Acquiring and Processing services, applies ECOM/POS volume split.
+    Revenue Protect is not affected by ECOM/POS split.
     """
     tx_variant = str(row.get('tx_variant', '')).strip()
     classification = str(row.get('region_classification', '')).strip()
     volume = safe_float(row.get('volume_eur', 0), 0.0)
-    atv = safe_float(row.get('atv', 100), 100.0)
     tx_count = safe_int(row.get('tx_count', 1), 1)
+    
+    ecom_volume = volume * (ecom_split_pct / 100.0)
+    pos_volume = volume * ((100.0 - ecom_split_pct) / 100.0)
+    ecom_tx_count = int(tx_count * (ecom_split_pct / 100.0))
+    pos_tx_count = tx_count - ecom_tx_count
     
     target_var_pct = safe_float(row.get('target_variable_pct', 0), 0.0)
     target_fixed = safe_float(row.get('target_fixed_eur', 0), 0.0)
@@ -104,7 +116,9 @@ def calculate_single_row_realization(
         'tx_variant': tx_variant,
         'region_classification': classification,
         'volume_eur': volume,
-        'atv': atv,
+        'ecom_volume': ecom_volume,
+        'pos_volume': pos_volume,
+        'ecom_split_pct': ecom_split_pct,
         'tx_count': tx_count,
         'target_variable_pct': target_var_pct,
         'target_fixed_eur': target_fixed,
@@ -212,7 +226,7 @@ def validate_deal_inputs(deal_inputs_df: pd.DataFrame) -> Tuple[bool, List[str]]
     
     required_columns = [
         'tx_variant', 'region_classification', 'volume_eur',
-        'atv', 'tx_count', 'target_variable_pct', 'target_fixed_eur',
+        'tx_count', 'target_variable_pct', 'target_fixed_eur',
         'proposed_variable_pct', 'proposed_fixed_eur'
     ]
     
@@ -314,19 +328,21 @@ def format_percentage(value: float) -> str:
     return f"{value:.2f}%"
 
 
-def update_tx_counts_for_product(deal_data: pd.DataFrame) -> pd.DataFrame:
+def update_tx_counts_for_product(deal_data: pd.DataFrame, global_atv: float = 50.0) -> pd.DataFrame:
     """
-    Update transaction counts based on volume/ATV for each row.
-    Handles NaN/blank values gracefully.
+    Update transaction counts based on volume and global ATV.
+    ATV is now a deal-level setting, not per-row.
     """
     if deal_data.empty:
         return deal_data
     
     updated_data = deal_data.copy()
     
+    if global_atv <= 0:
+        global_atv = 50.0
+    
     for idx, row in updated_data.iterrows():
         volume = row.get('volume_eur', None)
-        atv = row.get('atv', None)
         
         if pd.isna(volume) or volume == '' or volume is None:
             volume = 0.0
@@ -336,18 +352,7 @@ def update_tx_counts_for_product(deal_data: pd.DataFrame) -> pd.DataFrame:
             except (ValueError, TypeError):
                 volume = 0.0
         
-        if pd.isna(atv) or atv == '' or atv is None:
-            atv = 1.0
-        else:
-            try:
-                atv = float(atv)
-            except (ValueError, TypeError):
-                atv = 1.0
-        
-        if atv <= 0:
-            atv = 1.0
-        
-        expected_tx = calculate_tx_count_from_atv(volume, atv)
+        expected_tx = calculate_tx_count_from_atv(volume, global_atv)
         updated_data.at[idx, 'tx_count'] = expected_tx
     
     return updated_data

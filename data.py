@@ -239,6 +239,7 @@ def create_empty_deal_row_for_product(
 ) -> Dict:
     """
     Create an empty deal input row with default values pre-populated from target pricing.
+    ATV is now a global deal setting, tx_count will be calculated from Volume / Global ATV.
     """
     mask = (
         (pricing_df['material_code'] == material_code) &
@@ -256,14 +257,11 @@ def create_empty_deal_row_for_product(
         target_var = 0.60
         target_fixed = 0.05
     
-    default_atv = get_default_atv(material_code, tx_variant)
-    
     return {
         'tx_variant': tx_variant,
         'region_classification': classification,
         'volume_eur': 100000.0,
-        'atv': default_atv,
-        'tx_count': int(100000.0 / default_atv),
+        'tx_count': 0,
         'target_variable_pct': round(target_var, 4),
         'target_fixed_eur': round(target_fixed, 4),
         'proposed_variable_pct': round(target_var, 4),
@@ -382,6 +380,7 @@ def hydrate_new_rows(
     Ensure all rows in deal data have valid values.
     For new/empty rows, fill in defaults based on the first valid tx_variant and classification.
     This function handles the case when st.data_editor creates new rows with blank values.
+    Note: ATV is now global (from Deal Settings), tx_count is calculated separately.
     """
     if deal_data.empty:
         return deal_data
@@ -411,13 +410,11 @@ def hydrate_new_rows(
         else:
             classification = str(classification).strip()
         
-        default_atv = get_default_atv(material_code, tx_variant)
         pricing = lookup_pricing(pricing_df, material_code, tx_variant, classification)
         
         if needs_full_init:
             updated_data.at[idx, 'volume_eur'] = 100000.0
-            updated_data.at[idx, 'atv'] = default_atv
-            updated_data.at[idx, 'tx_count'] = max(1, int(100000.0 / default_atv))
+            updated_data.at[idx, 'tx_count'] = 0
             updated_data.at[idx, 'target_variable_pct'] = round(pricing['target_variable'] * 100, 4)
             updated_data.at[idx, 'target_fixed_eur'] = round(pricing['target_fixed'], 4)
             updated_data.at[idx, 'proposed_variable_pct'] = round(pricing['target_variable'] * 100, 4)
@@ -426,20 +423,6 @@ def hydrate_new_rows(
             volume = row.get('volume_eur', None)
             if pd.isna(volume) or volume == 0:
                 updated_data.at[idx, 'volume_eur'] = 100000.0
-                volume = 100000.0
-            else:
-                volume = float(volume)
-            
-            atv = row.get('atv', None)
-            if pd.isna(atv) or atv == 0:
-                updated_data.at[idx, 'atv'] = default_atv
-                atv = default_atv
-            else:
-                atv = float(atv)
-            
-            tx_count = row.get('tx_count', None)
-            if pd.isna(tx_count) or tx_count == 0:
-                updated_data.at[idx, 'tx_count'] = max(1, int(volume / atv))
             
             target_var = row.get('target_variable_pct', None)
             if pd.isna(target_var) or target_var == 0:
