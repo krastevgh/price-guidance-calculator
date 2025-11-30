@@ -11,6 +11,8 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 import io
 
+from data import get_classifications, get_tx_variants_for_material
+
 
 def render_kpi_cards(metrics: Dict[str, Any]) -> None:
     """
@@ -19,7 +21,7 @@ def render_kpi_cards(metrics: Dict[str, Any]) -> None:
     with st.container(border=True):
         st.subheader("Deal Summary")
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             st.metric(
@@ -29,20 +31,20 @@ def render_kpi_cards(metrics: Dict[str, Any]) -> None:
             )
         
         with col2:
-            margin_value = metrics['total_margin']
-            margin_delta = None
-            if margin_value < 0:
-                margin_color = "inverse"
-            else:
-                margin_color = "normal"
-            
             st.metric(
-                label="Total Margin",
-                value=f"€{margin_value:,.2f}",
+                label="Total Actual Margin",
+                value=f"€{metrics['total_actual_margin']:,.2f}",
                 help="Actual Revenue minus Total Cost"
             )
         
         with col3:
+            st.metric(
+                label="Total Target Margin",
+                value=f"€{metrics['total_target_margin']:,.2f}",
+                help="Target Revenue minus Total Cost"
+            )
+        
+        with col4:
             realization = metrics['global_realization_pct']
             
             if realization < 95:
@@ -56,7 +58,7 @@ def render_kpi_cards(metrics: Dict[str, Any]) -> None:
                         text-align: center;
                     ">
                         <p style="color: #666; margin: 0; font-size: 14px;">Global Realization %</p>
-                        <p style="color: #d32f2f; margin: 8px 0 0 0; font-size: 32px; font-weight: 600;">{realization:.1f}%</p>
+                        <p style="color: #d32f2f; margin: 8px 0 0 0; font-size: 28px; font-weight: 600;">{realization:.1f}%</p>
                     </div>
                     """,
                     unsafe_allow_html=True
@@ -65,45 +67,63 @@ def render_kpi_cards(metrics: Dict[str, Any]) -> None:
                 st.metric(
                     label="Global Realization %",
                     value=f"{realization:.1f}%",
-                    help="Actual Revenue / Target Revenue * 100"
+                    help="Actual Margin / Target Margin * 100"
                 )
 
 
-def render_deal_matrix(
+def render_product_deal_matrix(
+    material_code: str,
     deal_data: pd.DataFrame,
-    material_codes: List[str],
-    tx_variants: List[str],
-    atv: float
+    pricing_df: pd.DataFrame,
+    key_suffix: str = ""
 ) -> pd.DataFrame:
     """
-    Render the editable deal matrix using st.data_editor.
-    Returns the edited DataFrame.
+    Render an editable deal matrix for a specific product line.
+    Includes per-row classification, ATV, and target/proposed pricing.
     """
-    with st.container(border=True):
-        st.subheader("Deal Matrix")
-        st.caption("Add or edit product lines for this deal. Transaction Count auto-calculates from Volume/ATV but can be manually adjusted.")
+    tx_variants = get_tx_variants_for_material(material_code)
+    classifications = get_classifications()
+    
+    product_labels = {
+        'AcquiringService': 'Acquiring Service',
+        'ProcessingService': 'Processing Service',
+        'RevenueProtectService': 'Revenue Protect Service'
+    }
+    
+    with st.expander(f"**{product_labels.get(material_code, material_code)}**", expanded=True):
+        st.caption(f"Configure pricing for {product_labels.get(material_code, material_code)}. Target prices are pre-populated - adjust Proposed prices as your sale price.")
         
         column_config = {
-            "material_code": st.column_config.SelectboxColumn(
-                "Material Code",
-                options=material_codes,
-                required=True,
-                width="medium"
-            ),
             "tx_variant": st.column_config.SelectboxColumn(
                 "Tx Variant",
                 options=tx_variants,
                 required=True,
                 width="small"
             ),
+            "region_classification": st.column_config.SelectboxColumn(
+                "Region",
+                options=classifications,
+                required=True,
+                width="medium"
+            ),
             "volume_eur": st.column_config.NumberColumn(
                 "Volume (EUR)",
                 min_value=0,
                 max_value=1000000000,
-                step=1000,
+                step=10000,
                 format="€%.0f",
                 required=True,
                 width="medium"
+            ),
+            "atv": st.column_config.NumberColumn(
+                "ATV (EUR)",
+                min_value=1.0,
+                max_value=10000.0,
+                step=5.0,
+                format="€%.2f",
+                required=True,
+                width="small",
+                help="Average Transaction Value"
             ),
             "tx_count": st.column_config.NumberColumn(
                 "Tx Count",
@@ -114,24 +134,45 @@ def render_deal_matrix(
                 required=True,
                 width="small"
             ),
-            "proposed_variable_pct": st.column_config.NumberColumn(
-                "Proposed Variable %",
+            "target_variable_pct": st.column_config.NumberColumn(
+                "Target Var %",
                 min_value=0.0,
                 max_value=10.0,
                 step=0.01,
-                format="%.2f%%",
+                format="%.4f%%",
                 required=True,
-                width="medium",
-                help="Enter as percentage (e.g., 0.60 for 0.60%)"
+                width="small",
+                help="Target variable fee percentage"
             ),
-            "proposed_fixed_eur": st.column_config.NumberColumn(
-                "Proposed Fixed EUR",
+            "target_fixed_eur": st.column_config.NumberColumn(
+                "Target Fixed",
                 min_value=0.0,
                 max_value=10.0,
                 step=0.01,
                 format="€%.4f",
                 required=True,
-                width="medium"
+                width="small",
+                help="Target fixed fee per transaction"
+            ),
+            "proposed_variable_pct": st.column_config.NumberColumn(
+                "Proposed Var %",
+                min_value=0.0,
+                max_value=10.0,
+                step=0.01,
+                format="%.4f%%",
+                required=True,
+                width="small",
+                help="Your proposed variable fee (sale price)"
+            ),
+            "proposed_fixed_eur": st.column_config.NumberColumn(
+                "Proposed Fixed",
+                min_value=0.0,
+                max_value=10.0,
+                step=0.01,
+                format="€%.4f",
+                required=True,
+                width="small",
+                help="Your proposed fixed fee (sale price)"
             ),
         }
         
@@ -141,61 +182,104 @@ def render_deal_matrix(
             num_rows="dynamic",
             width="stretch",
             hide_index=True,
-            key="deal_matrix_editor"
+            key=f"deal_matrix_{material_code}_{key_suffix}"
         )
         
         return edited_df
 
 
-def render_gap_analysis_chart(results_df: pd.DataFrame) -> None:
+def render_product_results(
+    material_code: str,
+    results_df: pd.DataFrame,
+    metrics: Dict[str, Any]
+) -> None:
     """
-    Render Plotly bar chart comparing Target Revenue, Actual Revenue, and Total Cost.
+    Render results summary for a specific product line.
+    """
+    product_labels = {
+        'AcquiringService': 'Acquiring Service',
+        'ProcessingService': 'Processing Service',
+        'RevenueProtectService': 'Revenue Protect Service'
+    }
+    
+    if results_df.empty:
+        return
+    
+    with st.container(border=True):
+        col1, col2, col3, col4 = st.columns(4)
+        
+        realization = metrics['global_realization_pct']
+        color = "#d32f2f" if realization < 95 else "#388e3c"
+        
+        with col1:
+            st.markdown(f"**{product_labels.get(material_code, material_code)}**")
+        
+        with col2:
+            st.metric("Actual Margin", f"€{metrics['total_actual_margin']:,.2f}")
+        
+        with col3:
+            st.metric("Target Margin", f"€{metrics['total_target_margin']:,.2f}")
+        
+        with col4:
+            st.markdown(
+                f"""
+                <div style="text-align: center;">
+                    <span style="color: {color}; font-size: 24px; font-weight: 600;">{realization:.1f}%</span>
+                    <p style="color: #666; margin: 0; font-size: 12px;">Realization</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+
+def render_gap_analysis_chart(all_results: Dict[str, pd.DataFrame]) -> None:
+    """
+    Render Plotly bar chart comparing Target Margin, Actual Margin, and Cost.
     """
     with st.container(border=True):
-        st.subheader("Gap Analysis")
+        st.subheader("Margin Gap Analysis")
         
-        if results_df.empty:
-            st.info("Add products to the deal matrix to see the gap analysis.")
+        combined_results = []
+        for material_code, results_df in all_results.items():
+            if not results_df.empty:
+                combined_results.append(results_df)
+        
+        if not combined_results:
+            st.info("Add products to the deal matrices to see the gap analysis.")
             return
         
-        valid_results = results_df[results_df['target_revenue'].notna()].copy()
+        all_df = pd.concat(combined_results, ignore_index=True)
         
-        if valid_results.empty:
-            st.warning("No guidance found for the selected products. Unable to show gap analysis.")
-            return
-        
-        valid_results['product_label'] = (
-            valid_results['material_code'].str[:8] + 
-            '-' + 
-            valid_results['tx_variant']
+        all_df['product_label'] = (
+            all_df['material_code'].str[:8] + '-' + all_df['tx_variant']
         )
         
         fig = go.Figure()
         
         fig.add_trace(go.Bar(
-            name='Target Revenue',
-            x=valid_results['product_label'],
-            y=valid_results['target_revenue'],
+            name='Target Margin',
+            x=all_df['product_label'],
+            y=all_df['target_margin'],
             marker_color='#1976D2',
-            text=valid_results['target_revenue'].apply(lambda x: f'€{x:,.0f}'),
+            text=all_df['target_margin'].apply(lambda x: f'€{x:,.0f}'),
             textposition='outside'
         ))
         
         fig.add_trace(go.Bar(
-            name='Actual Revenue',
-            x=valid_results['product_label'],
-            y=valid_results['actual_revenue'],
+            name='Actual Margin',
+            x=all_df['product_label'],
+            y=all_df['actual_margin'],
             marker_color='#4CAF50',
-            text=valid_results['actual_revenue'].apply(lambda x: f'€{x:,.0f}'),
+            text=all_df['actual_margin'].apply(lambda x: f'€{x:,.0f}'),
             textposition='outside'
         ))
         
         fig.add_trace(go.Bar(
             name='Total Cost',
-            x=valid_results['product_label'],
-            y=valid_results['total_cost'],
+            x=all_df['product_label'],
+            y=all_df['total_cost'],
             marker_color='#FF5722',
-            text=valid_results['total_cost'].apply(lambda x: f'€{x:,.0f}'),
+            text=all_df['total_cost'].apply(lambda x: f'€{x:,.0f}'),
             textposition='outside'
         ))
         
@@ -221,22 +305,28 @@ def render_gap_analysis_chart(results_df: pd.DataFrame) -> None:
         st.plotly_chart(fig, width="stretch")
 
 
-def render_detailed_results_table(results_df: pd.DataFrame) -> None:
+def render_detailed_results_table(all_results: Dict[str, pd.DataFrame]) -> None:
     """
     Render a detailed results table with calculated metrics.
     """
     with st.container(border=True):
         st.subheader("Detailed Results")
         
-        if results_df.empty:
-            st.info("Add products to the deal matrix to see detailed results.")
+        combined_results = []
+        for material_code, results_df in all_results.items():
+            if not results_df.empty:
+                combined_results.append(results_df)
+        
+        if not combined_results:
+            st.info("Add products to the deal matrices to see detailed results.")
             return
         
-        display_df = results_df.copy()
+        all_df = pd.concat(combined_results, ignore_index=True)
         
         display_columns = [
             'material_code',
             'tx_variant',
+            'region_classification',
             'volume_eur',
             'tx_count',
             'proposed_variable_pct',
@@ -245,26 +335,27 @@ def render_detailed_results_table(results_df: pd.DataFrame) -> None:
             'target_revenue',
             'total_cost',
             'actual_margin',
+            'target_margin',
             'realization_pct',
-            'guidance_status'
         ]
         
-        available_columns = [col for col in display_columns if col in display_df.columns]
-        display_df = display_df[available_columns]
+        available_columns = [col for col in display_columns if col in all_df.columns]
+        display_df = all_df[available_columns]
         
         column_config = {
-            "material_code": st.column_config.TextColumn("Material Code", width="medium"),
+            "material_code": st.column_config.TextColumn("Product", width="medium"),
             "tx_variant": st.column_config.TextColumn("Variant", width="small"),
-            "volume_eur": st.column_config.NumberColumn("Volume (EUR)", format="€%.0f"),
+            "region_classification": st.column_config.TextColumn("Region", width="small"),
+            "volume_eur": st.column_config.NumberColumn("Volume", format="€%.0f"),
             "tx_count": st.column_config.NumberColumn("Tx Count", format="%d"),
-            "proposed_variable_pct": st.column_config.NumberColumn("Prop. Var %", format="%.2f%%"),
+            "proposed_variable_pct": st.column_config.NumberColumn("Prop. Var %", format="%.4f%%"),
             "proposed_fixed_eur": st.column_config.NumberColumn("Prop. Fixed", format="€%.4f"),
             "actual_revenue": st.column_config.NumberColumn("Actual Rev", format="€%.2f"),
             "target_revenue": st.column_config.NumberColumn("Target Rev", format="€%.2f"),
-            "total_cost": st.column_config.NumberColumn("Total Cost", format="€%.2f"),
-            "actual_margin": st.column_config.NumberColumn("Margin", format="€%.2f"),
+            "total_cost": st.column_config.NumberColumn("Cost", format="€%.2f"),
+            "actual_margin": st.column_config.NumberColumn("Actual Margin", format="€%.2f"),
+            "target_margin": st.column_config.NumberColumn("Target Margin", format="€%.2f"),
             "realization_pct": st.column_config.NumberColumn("Realization %", format="%.1f%%"),
-            "guidance_status": st.column_config.TextColumn("Status", width="small"),
         }
         
         st.dataframe(
@@ -275,10 +366,7 @@ def render_detailed_results_table(results_df: pd.DataFrame) -> None:
         )
 
 
-def render_sidebar_settings(
-    classifications: List[str],
-    default_date: Any
-) -> Dict[str, Any]:
+def render_sidebar_settings(default_date: Any) -> Dict[str, Any]:
     """
     Render sidebar settings and return the selected values.
     """
@@ -293,30 +381,12 @@ def render_sidebar_settings(
     deal_date = st.sidebar.date_input(
         "Deal Date",
         value=default_date,
-        help="Select the effective date for pricing guidance"
-    )
-    
-    classification = st.sidebar.selectbox(
-        "Price Guidance Classification",
-        options=classifications,
-        index=0,
-        help="Select the regional pricing tier"
-    )
-    
-    atv = st.sidebar.number_input(
-        "Avg Transaction Value (ATV)",
-        min_value=1.0,
-        max_value=100000.0,
-        value=100.0,
-        step=10.0,
-        help="Used to auto-calculate transaction count from volume"
+        help="Select the effective date for this deal"
     )
     
     return {
         'merchant_name': merchant_name,
         'deal_date': deal_date,
-        'classification': classification,
-        'atv': atv
     }
 
 
@@ -326,28 +396,20 @@ def render_admin_settings() -> Dict[str, Any]:
     Returns uploaded files if any.
     """
     with st.sidebar.expander("Admin Settings"):
-        st.caption("Upload custom CSV files to override default data")
+        st.caption("Upload custom CSV file to override default pricing data")
         
-        costs_file = st.file_uploader(
-            "Upload Costs CSV",
+        pricing_file = st.file_uploader(
+            "Upload Pricing CSV",
             type=['csv'],
-            key="costs_uploader",
-            help="CSV with columns: material_code, tx_variant, region_classification, cost_variable, cost_fixed_eur"
+            key="pricing_uploader",
+            help="CSV with columns: material_code, tx_variant, region_classification, cost_variable, cost_fixed, target_variable, target_fixed"
         )
         
-        guidance_file = st.file_uploader(
-            "Upload Guidance CSV",
-            type=['csv'],
-            key="guidance_uploader",
-            help="CSV with columns: material_code, tx_variant, price_guidance_classification, min_vol_eur, max_vol_eur, valid_from, valid_to, advised_fee_variable, advised_fee_fixed_eur"
-        )
-        
-        if costs_file is not None or guidance_file is not None:
-            st.success("Custom data uploaded!")
+        if pricing_file is not None:
+            st.success("Custom pricing data uploaded!")
         
         return {
-            'costs_file': costs_file,
-            'guidance_file': guidance_file
+            'pricing_file': pricing_file,
         }
 
 
@@ -372,41 +434,36 @@ def render_validation_errors(errors: List[str]) -> None:
                 st.write(f"- {error}")
 
 
-def render_realization_breakdown(results_df: pd.DataFrame) -> None:
+def render_realization_breakdown(all_results: Dict[str, pd.DataFrame]) -> None:
     """
     Render a breakdown of realization by product line.
     """
     with st.container(border=True):
         st.subheader("Realization by Product")
         
-        if results_df.empty:
-            st.info("Add products to see realization breakdown.")
-            return
+        product_labels = {
+            'AcquiringService': 'Acquiring',
+            'ProcessingService': 'Processing',
+            'RevenueProtectService': 'Revenue Protect'
+        }
         
-        valid_results = results_df[results_df['realization_pct'].notna()].copy()
+        cols = st.columns(len(all_results))
         
-        if valid_results.empty:
-            st.warning("No guidance available to calculate realization.")
-            return
-        
-        col1, col2, col3 = st.columns(3)
-        
-        grouped = valid_results.groupby('material_code').agg({
-            'actual_revenue': 'sum',
-            'target_revenue': 'sum',
-            'actual_margin': 'sum'
-        }).reset_index()
-        
-        grouped['realization'] = (grouped['actual_revenue'] / grouped['target_revenue'] * 100).round(1)
-        
-        for idx, row in grouped.iterrows():
-            col_idx = int(idx) % 3
-            target_col = [col1, col2, col3][col_idx]
+        for idx, (material_code, results_df) in enumerate(all_results.items()):
+            if results_df.empty:
+                continue
             
-            with target_col:
-                realization = row['realization']
-                color = "#d32f2f" if realization < 95 else "#388e3c"
-                
+            total_actual_margin = results_df['actual_margin'].sum()
+            total_target_margin = results_df['target_margin'].sum()
+            
+            if total_target_margin > 0:
+                realization = (total_actual_margin / total_target_margin) * 100
+            else:
+                realization = 100.0 if total_actual_margin >= 0 else 0.0
+            
+            color = "#d32f2f" if realization < 95 else "#388e3c"
+            
+            with cols[idx]:
                 st.markdown(
                     f"""
                     <div style="
@@ -416,9 +473,9 @@ def render_realization_breakdown(results_df: pd.DataFrame) -> None:
                         text-align: center;
                         margin-bottom: 8px;
                     ">
-                        <p style="color: #666; margin: 0; font-size: 12px;">{row['material_code'][:12]}</p>
+                        <p style="color: #666; margin: 0; font-size: 12px;">{product_labels.get(material_code, material_code)}</p>
                         <p style="color: {color}; margin: 4px 0; font-size: 24px; font-weight: 600;">{realization:.1f}%</p>
-                        <p style="color: #666; margin: 0; font-size: 11px;">Margin: €{row['actual_margin']:,.0f}</p>
+                        <p style="color: #666; margin: 0; font-size: 11px;">Margin: €{total_actual_margin:,.0f}</p>
                     </div>
                     """,
                     unsafe_allow_html=True
@@ -426,7 +483,7 @@ def render_realization_breakdown(results_df: pd.DataFrame) -> None:
 
 
 def render_export_section(
-    results_df: pd.DataFrame,
+    all_results: Dict[str, pd.DataFrame],
     metrics: Dict[str, Any],
     merchant_name: str,
     deal_date: Any
@@ -437,14 +494,21 @@ def render_export_section(
     with st.container(border=True):
         st.subheader("Export Deal Analysis")
         
-        if results_df.empty:
-            st.info("Add products to the deal matrix to enable export.")
+        combined_results = []
+        for material_code, results_df in all_results.items():
+            if not results_df.empty:
+                combined_results.append(results_df)
+        
+        if not combined_results:
+            st.info("Add products to the deal matrices to enable export.")
             return
+        
+        all_df = pd.concat(combined_results, ignore_index=True)
         
         col1, col2 = st.columns(2)
         
         with col1:
-            export_df = results_df.copy()
+            export_df = all_df.copy()
             export_df['merchant_name'] = merchant_name
             export_df['deal_date'] = str(deal_date)
             export_df['export_timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -470,7 +534,8 @@ def render_export_section(
                     'Total Actual Revenue (EUR)',
                     'Total Target Revenue (EUR)',
                     'Total Cost (EUR)',
-                    'Total Margin (EUR)',
+                    'Total Actual Margin (EUR)',
+                    'Total Target Margin (EUR)',
                     'Global Realization (%)',
                     'Number of Products'
                 ],
@@ -481,7 +546,8 @@ def render_export_section(
                     f"€{metrics['total_actual_revenue']:,.2f}",
                     f"€{metrics['total_target_revenue']:,.2f}",
                     f"€{metrics['total_cost']:,.2f}",
-                    f"€{metrics['total_margin']:,.2f}",
+                    f"€{metrics['total_actual_margin']:,.2f}",
+                    f"€{metrics['total_target_margin']:,.2f}",
                     f"{metrics['global_realization_pct']:.1f}%",
                     str(metrics['row_count'])
                 ]
@@ -518,7 +584,8 @@ def render_historical_comparison(saved_deals: List[Dict[str, Any]]) -> None:
                 'Merchant': deal['merchant_name'],
                 'Date': deal['deal_date'],
                 'Total Value': deal['metrics']['total_deal_value'],
-                'Margin': deal['metrics']['total_margin'],
+                'Actual Margin': deal['metrics']['total_actual_margin'],
+                'Target Margin': deal['metrics']['total_target_margin'],
                 'Realization %': deal['metrics']['global_realization_pct'],
                 'Products': deal['metrics']['row_count'],
                 'Saved At': deal['saved_at']
@@ -533,7 +600,8 @@ def render_historical_comparison(saved_deals: List[Dict[str, Any]]) -> None:
                 "Merchant": st.column_config.TextColumn("Merchant", width="small"),
                 "Date": st.column_config.TextColumn("Date", width="small"),
                 "Total Value": st.column_config.NumberColumn("Total Value", format="€%.0f"),
-                "Margin": st.column_config.NumberColumn("Margin", format="€%.2f"),
+                "Actual Margin": st.column_config.NumberColumn("Actual Margin", format="€%.2f"),
+                "Target Margin": st.column_config.NumberColumn("Target Margin", format="€%.2f"),
                 "Realization %": st.column_config.NumberColumn("Realization", format="%.1f%%"),
                 "Products": st.column_config.NumberColumn("Products", format="%d"),
                 "Saved At": st.column_config.TextColumn("Saved At", width="medium"),
@@ -549,7 +617,7 @@ def render_historical_comparison(saved_deals: List[Dict[str, Any]]) -> None:
                 {
                     'Deal': deal['name'],
                     'Realization': deal['metrics']['global_realization_pct'],
-                    'Margin': deal['metrics']['total_margin']
+                    'Actual Margin': deal['metrics']['total_actual_margin']
                 }
                 for deal in saved_deals
             ])
@@ -580,37 +648,39 @@ def render_historical_comparison(saved_deals: List[Dict[str, Any]]) -> None:
             st.plotly_chart(fig, width="stretch")
 
 
-def render_drill_down_analysis(results_df: pd.DataFrame) -> None:
+def render_drill_down_analysis(all_results: Dict[str, pd.DataFrame]) -> None:
     """
     Render drill-down analysis by product line and transaction variant.
     """
     with st.container(border=True):
         st.subheader("Drill-Down Analysis")
         
-        if results_df.empty:
+        combined_results = []
+        for material_code, results_df in all_results.items():
+            if not results_df.empty:
+                combined_results.append(results_df)
+        
+        if not combined_results:
             st.info("Add products to see drill-down analysis.")
             return
         
-        valid_results = results_df[results_df['target_revenue'].notna()].copy()
-        
-        if valid_results.empty:
-            st.warning("No guidance available for drill-down analysis.")
-            return
+        all_df = pd.concat(combined_results, ignore_index=True)
         
         tab1, tab2 = st.tabs(["By Product Line", "By Transaction Variant"])
         
         with tab1:
-            product_grouped = valid_results.groupby('material_code').agg({
+            product_grouped = all_df.groupby('material_code').agg({
                 'volume_eur': 'sum',
                 'tx_count': 'sum',
                 'actual_revenue': 'sum',
                 'target_revenue': 'sum',
                 'total_cost': 'sum',
-                'actual_margin': 'sum'
+                'actual_margin': 'sum',
+                'target_margin': 'sum'
             }).reset_index()
             
             product_grouped['realization_pct'] = (
-                product_grouped['actual_revenue'] / product_grouped['target_revenue'] * 100
+                product_grouped['actual_margin'] / product_grouped['target_margin'] * 100
             ).round(1)
             product_grouped['margin_pct'] = (
                 product_grouped['actual_margin'] / product_grouped['actual_revenue'] * 100
@@ -619,11 +689,20 @@ def render_drill_down_analysis(results_df: pd.DataFrame) -> None:
             fig_product = go.Figure()
             
             fig_product.add_trace(go.Bar(
-                name='Actual Revenue',
+                name='Actual Margin',
                 x=product_grouped['material_code'],
-                y=product_grouped['actual_revenue'],
+                y=product_grouped['actual_margin'],
                 marker_color='#4CAF50',
-                text=product_grouped['actual_revenue'].apply(lambda x: f'€{x:,.0f}'),
+                text=product_grouped['actual_margin'].apply(lambda x: f'€{x:,.0f}'),
+                textposition='outside'
+            ))
+            
+            fig_product.add_trace(go.Bar(
+                name='Target Margin',
+                x=product_grouped['material_code'],
+                y=product_grouped['target_margin'],
+                marker_color='#1976D2',
+                text=product_grouped['target_margin'].apply(lambda x: f'€{x:,.0f}'),
                 textposition='outside'
             ))
             
@@ -633,15 +712,6 @@ def render_drill_down_analysis(results_df: pd.DataFrame) -> None:
                 y=product_grouped['total_cost'],
                 marker_color='#FF5722',
                 text=product_grouped['total_cost'].apply(lambda x: f'€{x:,.0f}'),
-                textposition='outside'
-            ))
-            
-            fig_product.add_trace(go.Bar(
-                name='Margin',
-                x=product_grouped['material_code'],
-                y=product_grouped['actual_margin'],
-                marker_color='#2196F3',
-                text=product_grouped['actual_margin'].apply(lambda x: f'€{x:,.0f}'),
                 textposition='outside'
             ))
             
@@ -657,40 +727,38 @@ def render_drill_down_analysis(results_df: pd.DataFrame) -> None:
             
             st.markdown("##### Product Metrics")
             st.dataframe(
-                product_grouped[['material_code', 'volume_eur', 'tx_count', 'actual_revenue', 
-                                'actual_margin', 'realization_pct', 'margin_pct']],
+                product_grouped[['material_code', 'volume_eur', 'tx_count', 'actual_margin', 
+                                'target_margin', 'realization_pct']],
                 column_config={
                     "material_code": st.column_config.TextColumn("Product"),
                     "volume_eur": st.column_config.NumberColumn("Volume", format="€%.0f"),
                     "tx_count": st.column_config.NumberColumn("Tx Count", format="%d"),
-                    "actual_revenue": st.column_config.NumberColumn("Revenue", format="€%.2f"),
-                    "actual_margin": st.column_config.NumberColumn("Margin", format="€%.2f"),
+                    "actual_margin": st.column_config.NumberColumn("Actual Margin", format="€%.2f"),
+                    "target_margin": st.column_config.NumberColumn("Target Margin", format="€%.2f"),
                     "realization_pct": st.column_config.NumberColumn("Realization", format="%.1f%%"),
-                    "margin_pct": st.column_config.NumberColumn("Margin %", format="%.1f%%"),
                 },
                 width="stretch",
                 hide_index=True
             )
         
         with tab2:
-            variant_grouped = valid_results.groupby('tx_variant').agg({
+            variant_grouped = all_df.groupby('tx_variant').agg({
                 'volume_eur': 'sum',
                 'tx_count': 'sum',
                 'actual_revenue': 'sum',
-                'target_revenue': 'sum',
-                'total_cost': 'sum',
-                'actual_margin': 'sum'
+                'actual_margin': 'sum',
+                'target_margin': 'sum'
             }).reset_index()
             
             variant_grouped['realization_pct'] = (
-                variant_grouped['actual_revenue'] / variant_grouped['target_revenue'] * 100
+                variant_grouped['actual_margin'] / variant_grouped['target_margin'] * 100
             ).round(1)
             
             fig_variant = px.pie(
                 variant_grouped,
-                values='actual_revenue',
+                values='actual_margin',
                 names='tx_variant',
-                title='Revenue by Transaction Variant',
+                title='Margin by Transaction Variant',
                 color_discrete_sequence=px.colors.qualitative.Set2
             )
             
@@ -701,14 +769,14 @@ def render_drill_down_analysis(results_df: pd.DataFrame) -> None:
             
             st.markdown("##### Variant Metrics")
             st.dataframe(
-                variant_grouped[['tx_variant', 'volume_eur', 'tx_count', 'actual_revenue', 
-                                'actual_margin', 'realization_pct']],
+                variant_grouped[['tx_variant', 'volume_eur', 'tx_count', 'actual_margin', 
+                                'target_margin', 'realization_pct']],
                 column_config={
                     "tx_variant": st.column_config.TextColumn("Variant"),
                     "volume_eur": st.column_config.NumberColumn("Volume", format="€%.0f"),
                     "tx_count": st.column_config.NumberColumn("Tx Count", format="%d"),
-                    "actual_revenue": st.column_config.NumberColumn("Revenue", format="€%.2f"),
-                    "actual_margin": st.column_config.NumberColumn("Margin", format="€%.2f"),
+                    "actual_margin": st.column_config.NumberColumn("Actual Margin", format="€%.2f"),
+                    "target_margin": st.column_config.NumberColumn("Target Margin", format="€%.2f"),
                     "realization_pct": st.column_config.NumberColumn("Realization", format="%.1f%%"),
                 },
                 width="stretch",
@@ -758,37 +826,33 @@ def render_scenario_comparison(scenarios: List[Dict[str, Any]]) -> None:
             comparison_data = {
                 'Metric': [
                     'Total Deal Value',
-                    'Actual Revenue',
-                    'Target Revenue',
+                    'Actual Margin',
+                    'Target Margin',
                     'Total Cost',
-                    'Total Margin',
                     'Realization %',
                     'Product Count'
                 ],
                 scenario_a_name: [
                     f"€{metrics_a['total_deal_value']:,.0f}",
-                    f"€{metrics_a['total_actual_revenue']:,.2f}",
-                    f"€{metrics_a['total_target_revenue']:,.2f}",
+                    f"€{metrics_a['total_actual_margin']:,.2f}",
+                    f"€{metrics_a['total_target_margin']:,.2f}",
                     f"€{metrics_a['total_cost']:,.2f}",
-                    f"€{metrics_a['total_margin']:,.2f}",
                     f"{metrics_a['global_realization_pct']:.1f}%",
                     str(metrics_a['row_count'])
                 ],
                 scenario_b_name: [
                     f"€{metrics_b['total_deal_value']:,.0f}",
-                    f"€{metrics_b['total_actual_revenue']:,.2f}",
-                    f"€{metrics_b['total_target_revenue']:,.2f}",
+                    f"€{metrics_b['total_actual_margin']:,.2f}",
+                    f"€{metrics_b['total_target_margin']:,.2f}",
                     f"€{metrics_b['total_cost']:,.2f}",
-                    f"€{metrics_b['total_margin']:,.2f}",
                     f"{metrics_b['global_realization_pct']:.1f}%",
                     str(metrics_b['row_count'])
                 ],
                 'Difference': [
                     f"€{metrics_b['total_deal_value'] - metrics_a['total_deal_value']:+,.0f}",
-                    f"€{metrics_b['total_actual_revenue'] - metrics_a['total_actual_revenue']:+,.2f}",
-                    f"€{metrics_b['total_target_revenue'] - metrics_a['total_target_revenue']:+,.2f}",
+                    f"€{metrics_b['total_actual_margin'] - metrics_a['total_actual_margin']:+,.2f}",
+                    f"€{metrics_b['total_target_margin'] - metrics_a['total_target_margin']:+,.2f}",
                     f"€{metrics_b['total_cost'] - metrics_a['total_cost']:+,.2f}",
-                    f"€{metrics_b['total_margin'] - metrics_a['total_margin']:+,.2f}",
                     f"{metrics_b['global_realization_pct'] - metrics_a['global_realization_pct']:+.1f}pp",
                     f"{metrics_b['row_count'] - metrics_a['row_count']:+d}"
                 ]
@@ -804,16 +868,16 @@ def render_scenario_comparison(scenarios: List[Dict[str, Any]]) -> None:
             
             fig = go.Figure()
             
-            metrics_for_chart = ['Total Deal Value', 'Actual Revenue', 'Total Margin']
+            metrics_for_chart = ['Total Deal Value', 'Actual Margin', 'Target Margin']
             values_a = [
                 metrics_a['total_deal_value'],
-                metrics_a['total_actual_revenue'],
-                metrics_a['total_margin']
+                metrics_a['total_actual_margin'],
+                metrics_a['total_target_margin']
             ]
             values_b = [
                 metrics_b['total_deal_value'],
-                metrics_b['total_actual_revenue'],
-                metrics_b['total_margin']
+                metrics_b['total_actual_margin'],
+                metrics_b['total_target_margin']
             ]
             
             fig.add_trace(go.Bar(
@@ -849,7 +913,7 @@ def render_save_deal_controls(
     merchant_name: str,
     deal_date: Any,
     metrics: Dict[str, Any],
-    results_df: pd.DataFrame
+    all_results: Dict[str, pd.DataFrame]
 ) -> Optional[Dict[str, Any]]:
     """
     Render controls for saving deals/scenarios.
@@ -881,12 +945,23 @@ def render_save_deal_controls(
             )
         
         if save_as_deal or save_as_scenario:
+            combined_results = []
+            for material_code, results_df in all_results.items():
+                if not results_df.empty:
+                    combined_results.append(results_df)
+            
+            if combined_results:
+                all_df = pd.concat(combined_results, ignore_index=True)
+                results_records = all_df.to_dict('records')
+            else:
+                results_records = []
+            
             return {
                 'name': deal_name,
                 'merchant_name': merchant_name,
                 'deal_date': str(deal_date),
                 'metrics': metrics,
-                'results': results_df.to_dict('records'),
+                'results': results_records,
                 'saved_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 'type': 'deal' if save_as_deal else 'scenario'
             }

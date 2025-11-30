@@ -4,43 +4,42 @@ Handles data loading and mock data generation following the Digital Twin schema.
 """
 
 import pandas as pd
-from datetime import datetime, timedelta
-from typing import Tuple
+from typing import Tuple, Dict, List
 
 
-def load_reference_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_reference_data() -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Load reference data for the pricing guidance system.
-    Returns 3 DataFrames: catalog_df, costs_df, guidance_df
+    Returns 2 DataFrames: catalog_df, pricing_df (merged costs + targets)
     """
     catalog_df = generate_catalog_data()
-    costs_df = generate_costs_data()
-    guidance_df = generate_guidance_data()
+    pricing_df = generate_pricing_data()
     
-    return catalog_df, costs_df, guidance_df
+    return catalog_df, pricing_df
 
 
 def generate_catalog_data() -> pd.DataFrame:
     """
-    Generate Product Catalog (Table A) with material codes and pricing models.
+    Generate Product Catalog with material codes and pricing models.
     """
     data = [
-        {'material_code': 'AcquiringService', 'tx_variant': 'visa', 'pricing_model': 'Blended'},
-        {'material_code': 'AcquiringService', 'tx_variant': 'mc', 'pricing_model': 'Blended'},
-        {'material_code': 'AcquiringService', 'tx_variant': 'amex', 'pricing_model': 'Blended'},
-        {'material_code': 'AcquiringService', 'tx_variant': 'maestro', 'pricing_model': 'Blended'},
-        {'material_code': 'ProcessingService', 'tx_variant': 'visa', 'pricing_model': 'FixedPerTx'},
-        {'material_code': 'ProcessingService', 'tx_variant': 'mc', 'pricing_model': 'FixedPerTx'},
-        {'material_code': 'ProcessingService', 'tx_variant': 'amex', 'pricing_model': 'FixedPerTx'},
-        {'material_code': 'ProcessingService', 'tx_variant': 'maestro', 'pricing_model': 'FixedPerTx'},
-        {'material_code': 'RevenueProtectService', 'tx_variant': 'N/A', 'pricing_model': 'VariableOnly'},
+        {'material_code': 'AcquiringService', 'tx_variant': 'visa', 'pricing_model': 'Blended', 'default_atv': 100.0},
+        {'material_code': 'AcquiringService', 'tx_variant': 'mc', 'pricing_model': 'Blended', 'default_atv': 95.0},
+        {'material_code': 'AcquiringService', 'tx_variant': 'amex', 'pricing_model': 'Blended', 'default_atv': 150.0},
+        {'material_code': 'AcquiringService', 'tx_variant': 'maestro', 'pricing_model': 'Blended', 'default_atv': 45.0},
+        {'material_code': 'ProcessingService', 'tx_variant': 'visa', 'pricing_model': 'FixedPerTx', 'default_atv': 100.0},
+        {'material_code': 'ProcessingService', 'tx_variant': 'mc', 'pricing_model': 'FixedPerTx', 'default_atv': 95.0},
+        {'material_code': 'ProcessingService', 'tx_variant': 'amex', 'pricing_model': 'FixedPerTx', 'default_atv': 150.0},
+        {'material_code': 'ProcessingService', 'tx_variant': 'maestro', 'pricing_model': 'FixedPerTx', 'default_atv': 45.0},
+        {'material_code': 'RevenueProtectService', 'tx_variant': 'N/A', 'pricing_model': 'VariableOnly', 'default_atv': 100.0},
     ]
     return pd.DataFrame(data)
 
 
-def generate_costs_data() -> pd.DataFrame:
+def generate_pricing_data() -> pd.DataFrame:
     """
-    Generate Cost Base (Table B) with cost structures per product and region.
+    Generate merged Pricing data with costs AND target pricing per product/region.
+    Schema: material_code, tx_variant, region_classification, cost_variable, cost_fixed, target_variable, target_fixed
     """
     regions = ['Europe Domestic', 'NorthAmerica Domestic', 'Global']
     products = [
@@ -61,10 +60,22 @@ def generate_costs_data() -> pd.DataFrame:
         'Global': {'var_base': 0.0025, 'fixed_base': 0.025},
     }
     
-    product_multipliers = {
+    target_matrix = {
+        'Europe Domestic': {'var_base': 0.006, 'fixed_base': 0.05},
+        'NorthAmerica Domestic': {'var_base': 0.0065, 'fixed_base': 0.055},
+        'Global': {'var_base': 0.008, 'fixed_base': 0.07},
+    }
+    
+    product_cost_multipliers = {
         'AcquiringService': {'var': 1.0, 'fixed': 1.0},
         'ProcessingService': {'var': 0.0, 'fixed': 0.8},
         'RevenueProtectService': {'var': 0.5, 'fixed': 0.0},
+    }
+    
+    product_target_multipliers = {
+        'AcquiringService': {'var': 1.0, 'fixed': 1.0},
+        'ProcessingService': {'var': 0.0, 'fixed': 1.2},
+        'RevenueProtectService': {'var': 0.3, 'fixed': 0.0},
     }
     
     variant_multipliers = {
@@ -78,133 +89,129 @@ def generate_costs_data() -> pd.DataFrame:
     data = []
     for material_code, tx_variant in products:
         for region in regions:
-            base = cost_matrix[region]
-            prod_mult = product_multipliers[material_code]
+            cost_base = cost_matrix[region]
+            target_base = target_matrix[region]
+            cost_mult = product_cost_multipliers[material_code]
+            target_mult = product_target_multipliers[material_code]
             var_mult = variant_multipliers[tx_variant]
             
-            cost_variable = round(base['var_base'] * prod_mult['var'] * var_mult, 6)
-            cost_fixed_eur = round(base['fixed_base'] * prod_mult['fixed'] * var_mult, 4)
+            cost_variable = round(cost_base['var_base'] * cost_mult['var'] * var_mult, 6)
+            cost_fixed = round(cost_base['fixed_base'] * cost_mult['fixed'] * var_mult, 4)
+            target_variable = round(target_base['var_base'] * target_mult['var'] * var_mult, 6)
+            target_fixed = round(target_base['fixed_base'] * target_mult['fixed'] * var_mult, 4)
             
             data.append({
                 'material_code': material_code,
                 'tx_variant': tx_variant,
                 'region_classification': region,
                 'cost_variable': cost_variable,
-                'cost_fixed_eur': cost_fixed_eur,
+                'cost_fixed': cost_fixed,
+                'target_variable': target_variable,
+                'target_fixed': target_fixed,
             })
     
     return pd.DataFrame(data)
 
 
-def generate_guidance_data() -> pd.DataFrame:
-    """
-    Generate Commercial Guidance (Table C) with pricing tiers and validity dates.
-    """
-    today = datetime.now().date()
-    valid_from = today - timedelta(days=365)
-    valid_to = today + timedelta(days=365)
-    
-    classifications = ['Europe Domestic', 'NorthAmerica Domestic', 'Global']
-    
-    volume_tiers = [
-        (0, 100000),
-        (100000, 500000),
-        (500000, 1000000),
-        (1000000, 5000000),
-        (5000000, 50000000),
-        (50000000, float('inf')),
-    ]
-    
-    tier_discounts = [1.0, 0.95, 0.90, 0.85, 0.80, 0.75]
-    
-    products = [
-        ('AcquiringService', 'visa'),
-        ('AcquiringService', 'mc'),
-        ('AcquiringService', 'amex'),
-        ('AcquiringService', 'maestro'),
-        ('ProcessingService', 'visa'),
-        ('ProcessingService', 'mc'),
-        ('ProcessingService', 'amex'),
-        ('ProcessingService', 'maestro'),
-        ('RevenueProtectService', 'N/A'),
-    ]
-    
-    base_fees = {
-        'Europe Domestic': {'var': 0.006, 'fixed': 0.05},
-        'NorthAmerica Domestic': {'var': 0.0065, 'fixed': 0.055},
-        'Global': {'var': 0.008, 'fixed': 0.07},
-    }
-    
-    product_fee_multipliers = {
-        'AcquiringService': {'var': 1.0, 'fixed': 1.0},
-        'ProcessingService': {'var': 0.0, 'fixed': 1.2},
-        'RevenueProtectService': {'var': 0.3, 'fixed': 0.0},
-    }
-    
-    variant_fee_multipliers = {
-        'visa': 1.0,
-        'mc': 1.02,
-        'amex': 1.4,
-        'maestro': 0.9,
-        'N/A': 1.0,
-    }
-    
-    data = []
-    for material_code, tx_variant in products:
-        for classification in classifications:
-            for (min_vol, max_vol), discount in zip(volume_tiers, tier_discounts):
-                base = base_fees[classification]
-                prod_mult = product_fee_multipliers[material_code]
-                var_mult = variant_fee_multipliers[tx_variant]
-                
-                advised_fee_variable = round(base['var'] * prod_mult['var'] * var_mult * discount, 6)
-                advised_fee_fixed_eur = round(base['fixed'] * prod_mult['fixed'] * var_mult * discount, 4)
-                
-                max_vol_display = max_vol if max_vol != float('inf') else 999999999999
-                
-                data.append({
-                    'material_code': material_code,
-                    'tx_variant': tx_variant,
-                    'price_guidance_classification': classification,
-                    'min_vol_eur': min_vol,
-                    'max_vol_eur': max_vol_display,
-                    'valid_from': pd.Timestamp(valid_from),
-                    'valid_to': pd.Timestamp(valid_to),
-                    'advised_fee_variable': advised_fee_variable,
-                    'advised_fee_fixed_eur': advised_fee_fixed_eur,
-                })
-    
-    return pd.DataFrame(data)
-
-
-def get_material_codes() -> list:
+def get_material_codes() -> List[str]:
     """Return list of available material codes."""
     return ['AcquiringService', 'ProcessingService', 'RevenueProtectService']
 
 
-def get_tx_variants() -> list:
-    """Return list of available transaction variants."""
+def get_tx_variants_for_material(material_code: str) -> List[str]:
+    """Return list of transaction variants for a specific material code."""
+    if material_code == 'RevenueProtectService':
+        return ['N/A']
+    return ['visa', 'mc', 'amex', 'maestro']
+
+
+def get_all_tx_variants() -> List[str]:
+    """Return list of all transaction variants."""
     return ['visa', 'mc', 'amex', 'maestro', 'N/A']
 
 
-def get_classifications() -> list:
+def get_classifications() -> List[str]:
     """Return list of available price guidance classifications."""
     return ['Europe Domestic', 'NorthAmerica Domestic', 'Global']
 
 
-def create_empty_deal_row() -> dict:
-    """Create an empty deal input row with default values."""
+def get_default_atv(material_code: str, tx_variant: str) -> float:
+    """Get default ATV for a product/variant combination."""
+    atv_defaults = {
+        ('AcquiringService', 'visa'): 100.0,
+        ('AcquiringService', 'mc'): 95.0,
+        ('AcquiringService', 'amex'): 150.0,
+        ('AcquiringService', 'maestro'): 45.0,
+        ('ProcessingService', 'visa'): 100.0,
+        ('ProcessingService', 'mc'): 95.0,
+        ('ProcessingService', 'amex'): 150.0,
+        ('ProcessingService', 'maestro'): 45.0,
+        ('RevenueProtectService', 'N/A'): 100.0,
+    }
+    return atv_defaults.get((material_code, tx_variant), 100.0)
+
+
+def create_empty_deal_row_for_product(
+    material_code: str,
+    tx_variant: str,
+    classification: str,
+    pricing_df: pd.DataFrame
+) -> Dict:
+    """
+    Create an empty deal input row with default values pre-populated from target pricing.
+    """
+    mask = (
+        (pricing_df['material_code'] == material_code) &
+        (pricing_df['tx_variant'] == tx_variant) &
+        (pricing_df['region_classification'] == classification)
+    )
+    
+    matched = pricing_df[mask]
+    
+    if not matched.empty:
+        row = matched.iloc[0]
+        target_var = float(row['target_variable']) * 100
+        target_fixed = float(row['target_fixed'])
+    else:
+        target_var = 0.60
+        target_fixed = 0.05
+    
+    default_atv = get_default_atv(material_code, tx_variant)
+    
     return {
-        'material_code': 'AcquiringService',
-        'tx_variant': 'visa',
+        'tx_variant': tx_variant,
+        'region_classification': classification,
         'volume_eur': 100000.0,
-        'tx_count': 1000,
-        'proposed_variable_pct': 0.60,
-        'proposed_fixed_eur': 0.05,
+        'atv': default_atv,
+        'tx_count': int(100000.0 / default_atv),
+        'target_variable_pct': round(target_var, 4),
+        'target_fixed_eur': round(target_fixed, 4),
+        'proposed_variable_pct': round(target_var, 4),
+        'proposed_fixed_eur': round(target_fixed, 4),
     }
 
 
-def parse_uploaded_csv(uploaded_file, expected_columns: list) -> pd.DataFrame:
+def create_default_deal_data_for_product(
+    material_code: str,
+    pricing_df: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Create default deal data for a product with one row per transaction variant.
+    """
+    tx_variants = get_tx_variants_for_material(material_code)
+    default_classification = 'Europe Domestic'
+    
+    rows = []
+    for tx_variant in tx_variants:
+        row = create_empty_deal_row_for_product(
+            material_code, tx_variant, default_classification, pricing_df
+        )
+        rows.append(row)
+    
+    return pd.DataFrame(rows)
+
+
+def parse_uploaded_csv(uploaded_file, expected_columns: List[str]) -> pd.DataFrame:
     """
     Parse an uploaded CSV file and validate its columns.
     Returns DataFrame if valid, raises ValueError if invalid.
@@ -219,18 +226,145 @@ def parse_uploaded_csv(uploaded_file, expected_columns: list) -> pd.DataFrame:
         raise ValueError(f"Error parsing CSV: {str(e)}")
 
 
-def get_costs_expected_columns() -> list:
-    """Return expected columns for costs CSV upload."""
+def get_pricing_expected_columns() -> List[str]:
+    """Return expected columns for pricing CSV upload (merged costs + targets)."""
     return [
         'material_code', 'tx_variant', 'region_classification',
-        'cost_variable', 'cost_fixed_eur'
+        'cost_variable', 'cost_fixed', 'target_variable', 'target_fixed'
     ]
 
 
-def get_guidance_expected_columns() -> list:
-    """Return expected columns for guidance CSV upload."""
-    return [
-        'material_code', 'tx_variant', 'price_guidance_classification',
-        'min_vol_eur', 'max_vol_eur', 'valid_from', 'valid_to',
-        'advised_fee_variable', 'advised_fee_fixed_eur'
-    ]
+def lookup_pricing(
+    pricing_df: pd.DataFrame,
+    material_code: str,
+    tx_variant: str,
+    classification: str
+) -> Dict:
+    """
+    Look up pricing data (costs and targets) for a specific product/variant/region.
+    """
+    material_code = str(material_code).strip() if pd.notna(material_code) else ''
+    tx_variant = str(tx_variant).strip() if pd.notna(tx_variant) else ''
+    classification = str(classification).strip() if pd.notna(classification) else ''
+    
+    if not material_code or not tx_variant or not classification:
+        return {
+            'cost_variable': 0.0,
+            'cost_fixed': 0.0,
+            'target_variable': 0.0,
+            'target_fixed': 0.0,
+            'found': False
+        }
+    
+    mask = (
+        (pricing_df['material_code'] == material_code) &
+        (pricing_df['tx_variant'] == tx_variant) &
+        (pricing_df['region_classification'] == classification)
+    )
+    
+    matched = pricing_df[mask]
+    
+    if matched.empty:
+        return {
+            'cost_variable': 0.0,
+            'cost_fixed': 0.0,
+            'target_variable': 0.0,
+            'target_fixed': 0.0,
+            'found': False
+        }
+    
+    row = matched.iloc[0]
+    return {
+        'cost_variable': float(row['cost_variable']),
+        'cost_fixed': float(row['cost_fixed']),
+        'target_variable': float(row['target_variable']),
+        'target_fixed': float(row['target_fixed']),
+        'found': True
+    }
+
+
+def hydrate_new_rows(
+    deal_data: pd.DataFrame,
+    material_code: str,
+    pricing_df: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Ensure all rows in deal data have valid values.
+    For new/empty rows, fill in defaults based on the first valid tx_variant and classification.
+    This function handles the case when st.data_editor creates new rows with blank values.
+    """
+    if deal_data.empty:
+        return deal_data
+    
+    updated_data = deal_data.copy()
+    tx_variants = get_tx_variants_for_material(material_code)
+    classifications = get_classifications()
+    default_classification = classifications[0]
+    default_variant = tx_variants[0]
+    
+    for idx, row in updated_data.iterrows():
+        tx_variant = row.get('tx_variant', None)
+        needs_full_init = False
+        
+        if pd.isna(tx_variant) or str(tx_variant).strip() == '' or str(tx_variant) == 'nan':
+            updated_data.at[idx, 'tx_variant'] = default_variant
+            tx_variant = default_variant
+            needs_full_init = True
+        else:
+            tx_variant = str(tx_variant).strip()
+        
+        classification = row.get('region_classification', None)
+        if pd.isna(classification) or str(classification).strip() == '' or str(classification) == 'nan':
+            updated_data.at[idx, 'region_classification'] = default_classification
+            classification = default_classification
+            needs_full_init = True
+        else:
+            classification = str(classification).strip()
+        
+        default_atv = get_default_atv(material_code, tx_variant)
+        pricing = lookup_pricing(pricing_df, material_code, tx_variant, classification)
+        
+        if needs_full_init:
+            updated_data.at[idx, 'volume_eur'] = 100000.0
+            updated_data.at[idx, 'atv'] = default_atv
+            updated_data.at[idx, 'tx_count'] = max(1, int(100000.0 / default_atv))
+            updated_data.at[idx, 'target_variable_pct'] = round(pricing['target_variable'] * 100, 4)
+            updated_data.at[idx, 'target_fixed_eur'] = round(pricing['target_fixed'], 4)
+            updated_data.at[idx, 'proposed_variable_pct'] = round(pricing['target_variable'] * 100, 4)
+            updated_data.at[idx, 'proposed_fixed_eur'] = round(pricing['target_fixed'], 4)
+        else:
+            volume = row.get('volume_eur', None)
+            if pd.isna(volume) or volume == 0:
+                updated_data.at[idx, 'volume_eur'] = 100000.0
+                volume = 100000.0
+            else:
+                volume = float(volume)
+            
+            atv = row.get('atv', None)
+            if pd.isna(atv) or atv == 0:
+                updated_data.at[idx, 'atv'] = default_atv
+                atv = default_atv
+            else:
+                atv = float(atv)
+            
+            tx_count = row.get('tx_count', None)
+            if pd.isna(tx_count) or tx_count == 0:
+                updated_data.at[idx, 'tx_count'] = max(1, int(volume / atv))
+            
+            target_var = row.get('target_variable_pct', None)
+            if pd.isna(target_var) or target_var == 0:
+                updated_data.at[idx, 'target_variable_pct'] = round(pricing['target_variable'] * 100, 4)
+            
+            target_fixed = row.get('target_fixed_eur', None)
+            if pd.isna(target_fixed):
+                updated_data.at[idx, 'target_fixed_eur'] = round(pricing['target_fixed'], 4)
+            
+            proposed_var = row.get('proposed_variable_pct', None)
+            if pd.isna(proposed_var) or proposed_var == 0:
+                updated_data.at[idx, 'proposed_variable_pct'] = round(pricing['target_variable'] * 100, 4)
+            
+            proposed_fixed = row.get('proposed_fixed_eur', None)
+            if pd.isna(proposed_fixed):
+                updated_data.at[idx, 'proposed_fixed_eur'] = round(pricing['target_fixed'], 4)
+    
+    return updated_data

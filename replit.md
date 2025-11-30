@@ -6,7 +6,8 @@ A production-grade Streamlit application for commercial pricing guidance and rea
 ## Current State
 - Fully functional application with all core and advanced features implemented
 - Modular 4-file architecture (data.py, logic.py, components.py, app.py)
-- Real-time deal matrix with auto-calculated transaction counts
+- Per-product deal matrices with inline Region and ATV configuration
+- Margin-based realization calculation (Actual Margin vs Target Margin)
 - KPI dashboard with realization metrics
 - Gap analysis visualization with Plotly charts
 - Data export, historical comparison, drill-down analysis, and scenario comparison
@@ -19,35 +20,52 @@ A production-grade Streamlit application for commercial pricing guidance and rea
 - `logic.py` - Pure Python functions for calculations and business rules
 - `data.py` - Data loading and mock data generation (Digital Twin schema)
 
-### Data Schema (Digital Twin)
+### Data Schema (Merged Pricing)
 **Table A: Product Catalog (catalog_df)**
 - material_code: AcquiringService, ProcessingService, RevenueProtectService
 - tx_variant: visa, mc, amex, maestro, N/A
 - pricing_model: Blended, FixedPerTx, VariableOnly
+- default_atv: Default average transaction value
 
-**Table B: Cost Base (costs_df)**
+**Table B: Pricing Data (pricing_df) - Merged Costs + Targets**
 - material_code, tx_variant, region_classification
-- cost_variable, cost_fixed_eur
+- cost_variable, cost_fixed (cost structure)
+- target_variable, target_fixed (target pricing)
 
-**Table C: Commercial Guidance (guidance_df)**
-- material_code, tx_variant, price_guidance_classification
-- min_vol_eur, max_vol_eur, valid_from, valid_to
-- advised_fee_variable, advised_fee_fixed_eur
+### Deal Matrix Columns (Per Product)
+- tx_variant: Transaction variant selection
+- region_classification: Europe Domestic, NorthAmerica Domestic, Global
+- volume_eur: Deal volume in EUR
+- atv: Average Transaction Value (per-row)
+- tx_count: Transaction count (auto-calculated from Volume/ATV)
+- target_variable_pct, target_fixed_eur: Pre-populated target pricing
+- proposed_variable_pct, proposed_fixed_eur: User's sale price
+
+### Calculation Logic
+- Actual Revenue = (Volume * proposed_var) + (Tx * proposed_fixed)
+- Target Revenue = (Volume * target_var) + (Tx * target_fixed)
+- Cost = (Volume * cost_var) + (Tx * cost_fixed)
+- **Actual Margin = Actual Revenue - Cost**
+- **Target Margin = Target Revenue - Cost**
+- **Realization % = (Actual Margin / Target Margin) * 100**
 
 ### Key Features
-1. Interactive deal matrix with st.data_editor
-2. Auto-calculation of Tx Count from Volume/ATV
-3. Date-filtered guidance lookup with volume tier matching
-4. ProcessingService exception handling (fixed-only pricing)
-5. Color-coded realization indicators (red if < 95%)
-6. Gap analysis chart (Target vs Actual vs Cost)
-7. CSV file upload for custom costs/guidance data
-8. Data export functionality (detailed results and summary CSV)
-9. Historical deal comparison with trend visualization
-10. Drill-down analysis by product line and transaction variant
-11. Deal scenario comparison (side-by-side what-if analysis)
+1. Per-product deal matrices (Acquiring, Processing, Revenue Protect)
+2. Per-row Region classification and ATV configuration
+3. Target prices pre-populated from pricing data (adjustable as sale price)
+4. Auto-calculation of Tx Count from Volume/ATV
+5. ProcessingService exception handling (fixed-only pricing)
+6. Margin-based realization calculation (Actual vs Target Margin)
+7. Color-coded realization indicators (red if < 95%)
+8. Gap analysis chart (Target Margin vs Actual Margin vs Cost)
+9. CSV file upload for custom pricing data
+10. Data export functionality (detailed results and summary CSV)
+11. Historical deal comparison with trend visualization
+12. Drill-down analysis by product line and transaction variant
+13. Deal scenario comparison (side-by-side what-if analysis)
 
 ## Recent Changes
+- November 30, 2025: Restructured to per-product deal matrices with inline Region/ATV, merged pricing schema, margin-based realization
 - November 30, 2025: Added data export, historical comparison, drill-down analysis, scenario comparison
 - November 30, 2025: Initial implementation of full MVP
 
