@@ -1,0 +1,70 @@
+reate a comprehensive, production-grade Streamlit application for "Commercial Pricing Guidance & Realization."
+
+### 1. Architecture & Style Guide
+Strictly adhere to the following modular structure, modeled after Adyen's internal tools:
+* **Modularity:** Split the code into 4 files:
+    * `main.py`: Entry point, Page Config, Session State, and Sidebar.
+    * `components.py`: UI rendering functions (KPI Cards, Data Editor, Charts).
+    * `logic.py`: Pure Python functions for calculations, lookups, and business rules.
+    * `data.py`: Data loading and Mock Data generation.
+* **Type Hinting:** All functions must have type hints (e.g., `def calculate_margin(vol: float) -> float:`).
+* **UI Containers:** Use `with st.container(border=True):` to group related metrics.
+* **State Management:** Initialize session state safely in a dedicated function in `main.py`.
+
+### 2. Data Structure (The "Digital Twin" Schema)
+In `data.py`, create a function `load_reference_data()` that returns 3 DataFrames. Use these EXACT column names to match our internal SQL schema:
+
+**Table A: Product Catalog (`catalog_df`)**
+* `material_code`: 'AcquiringService', 'ProcessingService', 'RevenueProtectService'
+* `tx_variant`: 'visa', 'mc', 'amex', 'maestro', 'N/A'
+* `pricing_model`: 'Blended' (Var+Fixed), 'FixedPerTx' (Fixed Only), 'VariableOnly'
+
+**Table B: Cost Base (`costs_df`)**
+* `material_code`, `tx_variant`: Links to Catalog
+* `region_classification`: 'Europe Domestic', 'NorthAmerica Domestic', 'Global'
+* `cost_variable`: Float (e.g., 0.002)
+* `cost_fixed_eur`: Float (e.g., 0.02)
+
+**Table C: Commercial Guidance (`guidance_df`)**
+* `material_code`, `tx_variant`: Links to Catalog
+* `price_guidance_classification`: 'Europe Domestic', 'NorthAmerica Domestic', 'Global'
+* `min_vol_eur`, `max_vol_eur`: Volume Tier ranges
+* `valid_from`, `valid_to`: Date range for rule validity (Datetime)
+* `advised_fee_variable`: The Target % (e.g., 0.006)
+* `advised_fee_fixed_eur`: The Target Fixed Fee (e.g., 0.05)
+
+### 3. Logic Engine (`logic.py`)
+Create a function `calculate_deal_realization(deal_inputs_df, guidance_df, costs_df, deal_date)`:
+1.  **Iterate** through the user's input rows.
+2.  **Date Filter:** First, filter `guidance_df` where `valid_from <= deal_date <= valid_to`.
+3.  **Guidance Lookup:** Find the specific row matching:
+    * `material_code` AND `tx_variant` AND `classification`
+    * AND `min_vol <= input_volume < max_vol`
+4.  **Math & Realization:**
+    * `Actual Revenue` = (Vol * user_var) + (Tx * user_fixed)
+    * `Target Revenue` = (Vol * target_var) + (Tx * target_fixed)
+    * `Total Cost` = (Vol * cost_var) + (Tx * cost_fixed)
+    * `Actual Margin` = Actual Revenue - Total Cost
+    * `Realization %` = (Actual Revenue / Target Revenue) * 100
+5.  **Exceptions:**
+    * If `material_code == 'ProcessingService'`, force Variable Fee to 0 (Fixed only).
+    * Handle missing targets gracefully (return "No Guidance Found").
+
+### 4. User Experience (`main.py` & `components.py`)
+**A. Global Settings (Sidebar)**
+* `Merchant Name`: Text Input
+* `Deal Date`: Date Input (defaults to Today).
+* `Price Guidance Classification`: Selectbox ('Europe Domestic', 'Global').
+* `Avg Transaction Value (ATV)`: Number Input.
+
+**B. The Deal Matrix (`st.data_editor`)**
+* Allow the user to add rows for multiple products.
+* Columns: `material_code`, `tx_variant`, `Volume (EUR)`, `Tx Count` (Auto-calc as Vol/ATV but editable), `Proposed Variable %`, `Proposed Fixed EUR`.
+
+**C. Visualization**
+* **KPI Cards:** Display "Total Deal Value", "Total Margin", and "Global Realization %" in a top row container. Color Realization Red if < 95%.
+* **Gap Analysis Chart:** Use Plotly to show a bar chart comparing:
+    * Bar 1: Target Revenue
+    * Bar 2: Actual Revenue
+    * Bar 3: Total Cost
+* **File Upload:** In the Sidebar, add an `st.expander` named "Admin Settings". Add `st.file_uploader` widgets to allow the user to upload their own CSVs for `costs_df` and `guidance_df` to overwrite the defaults.
